@@ -1,4 +1,5 @@
 import { TractionEyeHttpClient } from './http/client.js';
+import { logMethodCall } from './logger.js';
 import type { AvailableToken, PortfolioSummary, StrategySummary, TractionEyeClientConfig } from './types/contracts.js';
 
 const DEFAULT_BASE_URL = 'https://test.tractioneye.xyz/trust_api';
@@ -48,11 +49,14 @@ export class TractionEyeClient {
     const baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
     const http = new TractionEyeHttpClient(baseUrl, config.agentToken);
     const strategy = await http.get<AgentStrategyResponse>('/agent/strategy');
+
     return new TractionEyeClient(http, String(strategy.strategy_id), strategy.strategy_name);
   }
 
   async getStrategySummary(): Promise<StrategySummary> {
+    logMethodCall('getStrategySummary');
     const s = await this.http.get<AgentStrategyResponse>('/agent/strategy');
+
     return {
       strategyId: String(s.strategy_id),
       strategyName: s.strategy_name,
@@ -69,7 +73,9 @@ export class TractionEyeClient {
   }
 
   async getPortfolio(): Promise<PortfolioSummary> {
+    logMethodCall('getPortfolio');
     const p = await this.http.get<AgentPortfolioResponse>('/agent/portfolio');
+
     return {
       strategyId: this.strategyId,
       totalRealizedPnlTon: String(p.total_realized_pnl_ton),
@@ -87,12 +93,28 @@ export class TractionEyeClient {
     };
   }
 
-  async getAvailableTokens(limit = 200, offset = 0): Promise<AvailableToken[]> {
-    const r = await this.http.get<StonfiAssetsResponse>(`/stonfi/assets?limit=${limit}&offset=${offset}`);
-    return r.asset_list.map((a) => ({
-      address: a.contract_address,
-      symbol: a.symbol,
-      decimals: a.decimals,
-    }));
+  async getAvailableTokens(): Promise<AvailableToken[]> {
+    logMethodCall('getAvailableTokens');
+
+    const pageSize = 200;
+    let offset = 0;
+    const tokens: AvailableToken[] = [];
+
+    while (true) {
+      const r = await this.http.get<StonfiAssetsResponse>(`/stonfi/assets?limit=${pageSize}&offset=${offset}`);
+      const page = r.asset_list.map((a) => ({
+        address: a.contract_address,
+        symbol: a.symbol,
+        decimals: a.decimals,
+      }));
+
+      tokens.push(...page);
+
+      if (page.length < pageSize) {
+        return tokens;
+      }
+
+      offset += pageSize;
+    }
   }
 }
