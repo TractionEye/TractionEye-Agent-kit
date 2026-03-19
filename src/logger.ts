@@ -3,6 +3,5 @@ export function logMethodCall(method: string, args?: Record<string, unknown>): v
     console.log(`[TractionEyeClient] ${method}`, args);
     return;
   }
-
   console.log(`[TractionEyeClient] ${method}`);
 }

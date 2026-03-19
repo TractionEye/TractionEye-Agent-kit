@@ -13,21 +13,36 @@ export class TractionEyeHttpClient {
   constructor(private readonly baseUrl: string, private readonly agentToken: string) {}
 
   async get<T>(path: string): Promise<T> {
+    return this._request<T>('GET', path);
+  }
+
+  async post<T>(path: string, body: unknown): Promise<T> {
+    return this._request<T>('POST', path, body);
+  }
+
+  private async _request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
+      method,
       headers: {
         Authorization: `agent ${this.agentToken}`,
         Accept: 'application/json',
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
 
     const text = await res.text();
-    const body = text ? safeJsonParse(text) : undefined;
+    const parsed = text ? safeJsonParse(text) : undefined;
 
     if (!res.ok) {
-      throw new TractionEyeHttpError(`HTTP ${res.status} for GET ${path}`, res.status, body ?? text);
+      throw new TractionEyeHttpError(
+        `HTTP ${res.status} for ${method} ${path}`,
+        res.status,
+        parsed ?? text,
+      );
     }
 
-    return (body ?? {}) as T;
+    return (parsed ?? {}) as T;
   }
 }
 

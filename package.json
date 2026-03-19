@@ -6,14 +6,18 @@
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts",
     "check": "tsc --noEmit",
     "dev": "tsup src/index.ts --watch --format esm,cjs --dts"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "tsup": "^8.0.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.4.5"
   }
 }
