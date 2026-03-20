@@ -8,7 +8,31 @@ TypeScript SDK for TractionEye trading agents. Provides a clean, high-level inte
 npm install @tractioneye/agent-sdk
 ```
 
-## Quick start
+> **Can't install from npm yet?** Clone and build locally — see [Local development](#local-development) below.
+
+---
+
+## Getting started
+
+### Step 1 — Get your Agent Token
+
+The SDK authenticates via an **Agent Token** tied to a specific TractionEye strategy.
+
+1. Open [TractionEye](https://test.tractioneye.xyz) in Telegram
+2. Go to your strategy → tap **Edit Strategy** (settings icon)
+3. Tap **Generate Token**
+4. Copy the token — it will only be shown once
+
+> **One token = one strategy.** The client automatically reads `strategyId` from the token on startup.
+> To get a fresh token at any time, tap **Regenerate** — the old token is immediately revoked.
+
+### Step 2 — Set the environment variable
+
+```bash
+export TRACTIONEYE_AGENT_TOKEN=your_token_here
+```
+
+### Step 3 — Initialize the client
 
 ```ts
 import { TractionEyeClient } from '@tractioneye/agent-sdk';
@@ -19,22 +43,32 @@ const client = await TractionEyeClient.create({
 
 const summary = await client.getStrategySummary();
 console.log('Strategy:', summary.strategyName, '| TON in strategy:', summary.tonInStrategy);
-
-const portfolio = await client.getPortfolio();
-console.log('Tokens held:', portfolio.tokens.map(t => t.symbol));
-
-const tokens = await client.getAvailableTokens();
-console.log('Available tokens:', tokens.map(t => t.symbol));
 ```
+
+---
+
+## Local development
+
+If the npm package is not yet available, run directly from source:
+
+```bash
+git clone https://github.com/TractionEye/agent-sdk
+cd agent-sdk
+npm install
+npm run build
+
+export TRACTIONEYE_AGENT_TOKEN=your_token_here
+npx tsx examples/buy-flow.ts
+```
+
+---
 
 ## Configuration
 
 | Option | Type | Required | Description |
 |---|---|---|---|
-| `agentToken` | `string` | ✅ | JWT agent token from TractionEye |
+| `agentToken` | `string` | ✅ | Agent token from TractionEye Edit Strategy screen |
 | `baseUrl` | `string` | ❌ | Override API base URL. Default: `https://test.tractioneye.xyz/trust_api` |
-
-**Rule:** 1 `agentToken` = 1 strategy. The client reads `strategyId` automatically on `create()`.
 
 ---
 
@@ -75,7 +109,7 @@ const summary = await client.getStrategySummary();
 | `totalWinRate` | `number` | Win rate (0–1) |
 | `tradesPerWeek` | `number` | Average trades per week |
 | `maxDrawdown` | `number` | Maximum drawdown |
-| `lowBalanceState` | `boolean` | True if balance is critically low |
+| `lowBalanceState` | `boolean` | True if balance is critically low (< 0.35 TON) |
 
 ---
 
@@ -113,14 +147,16 @@ const portfolio = await client.getPortfolio();
 
 ---
 
-### `getAvailableTokens()`
+### `getAvailableTokens(limit?, offset?)`
 
-Returns the list of tokens available for trading in this strategy.
+Returns a page of tokens available for trading (default: first 200).
 
 ```ts
 const tokens = await client.getAvailableTokens();
 // [{ address: 'EQ...', symbol: 'WETH', decimals: 18 }, ...]
 ```
+
+> **Tip:** Use `findToken(symbol)` for symbol-based lookup — it's more efficient than loading the full list.
 
 **Returns: `AvailableToken[]`**
 
@@ -130,7 +166,16 @@ const tokens = await client.getAvailableTokens();
 | `symbol` | `string` | Token symbol |
 | `decimals` | `number` | Token decimals |
 
-Automatically paginates through the full token catalog.
+---
+
+### `findToken(symbol)`
+
+Find a single token by its symbol. Preferred way to resolve symbol → address before trading.
+
+```ts
+const weth = await client.findToken('WETH');
+if (!weth) throw new Error('WETH not found');
+```
 
 ---
 
@@ -152,7 +197,7 @@ const preview = await client.previewTrade({
 |---|---|---|---|
 | `action` | `'BUY' \| 'SELL'` | ✅ | Trade direction |
 | `tokenAddress` | `string` | ✅ | Jetton address |
-| `amountNano` | `string` | ✅ | Amount in nano units (TON for BUY, jetton for SELL) |
+| `amountNano` | `string` | ✅ | Amount in nano units (TON nanotons for BUY, jetton nano units for SELL) |
 
 **Returns: `TradePreview`**
 
@@ -164,10 +209,6 @@ const preview = await client.previewTrade({
 | `minReceiveNano` | `string` | Minimum output after slippage |
 | `priceImpactPercent` | `number` | Price impact % |
 | `swapRate` | `string` | Current exchange rate |
-
-**BUY/SELL address mapping** (handled internally by SDK):
-- BUY (TON → jetton): `offeraddress = TON_NATIVE`, `askaddress = tokenAddress`
-- SELL (jetton → TON): `offeraddress = tokenAddress`, `askaddress = TON_NATIVE`
 
 ---
 
@@ -212,7 +253,7 @@ console.log('Operation ID:', execution.operationId);
 
 ### `getOperationStatus(operationId)`
 
-Polls the status of an executed trade.
+Polls the status of an executed trade. Poll every 3–5 seconds until status is not `pending`.
 
 ```ts
 const status = await client.getOperationStatus(execution.operationId);
@@ -223,32 +264,40 @@ const status = await client.getOperationStatus(execution.operationId);
 | Field | Type | Description |
 |---|---|---|
 | `operationId` | `string` | Operation ID |
-| `status` | `'pending' \| 'confirmed' \| 'adjusted' \| 'failed'` | Current status |
+| `status` | `'pending' \| 'confirmed' \| 'adjusted' \| 'failed'` | Current status (see below) |
 | `swapType` | `TradeAction` | `BUY` or `SELL` |
 | `tokenAddress` | `string` | Token address |
 | `actualTokenAmountNano` | `string?` | Actual token amount received |
 | `actualTonAmountNano` | `string?` | Actual TON amount received |
 | `failureReason` | `string?` | Human-readable failure reason |
-| `errorCode` | `number?` | Error code if failed |
 
-**Status lifecycle:** `pending → confirmed | adjusted | failed`
+**Operation status lifecycle:**
 
-Poll every 3–5 seconds until status is not `pending`.
+```
+pending → confirmed   ✅ trade executed on-chain as expected
+        → adjusted    ⚠️  trade executed but with a different amount
+                          (e.g. slippage hit, partial fill). Check actualTokenAmountNano.
+        → failed      ❌ trade did not execute. Check failureReason.
+                          Common reasons: transaction timeout, insufficient balance, DEX error.
+```
+
+> **On `adjusted`:** The trade went through, but the actual received amount differs from `estimatedReceiveNano`. Always use `actualTokenAmountNano` / `actualTonAmountNano` to record what was actually received.
+
+> **On `failed`:** No funds were moved. It is safe to retry the trade.
 
 ---
 
 ## Example: BUY flow with polling
 
 ```ts
-import { TractionEyeClient, OperationStatus } from '@tractioneye/agent-sdk';
+import { TractionEyeClient } from '@tractioneye/agent-sdk';
 
 const client = await TractionEyeClient.create({
   agentToken: process.env.TRACTIONEYE_AGENT_TOKEN!,
 });
 
 // 1. Find token
-const tokens = await client.getAvailableTokens();
-const weth = tokens.find(t => t.symbol === 'WETH');
+const weth = await client.findToken('WETH');
 if (!weth) throw new Error('WETH not available');
 
 // 2. Amount: 5 TON
@@ -262,29 +311,21 @@ const preview = await client.previewTrade({
 });
 
 if (preview.validationOutcome === 'rejected') {
-  console.log('Trade rejected:', preview);
+  console.log('Trade rejected');
   process.exit(1);
 }
-
-if (preview.validationOutcome === 'warning' || preview.lowBalanceState) {
-  console.warn('Warning:', preview);
-  // agent decides whether to proceed
-}
-
-console.log(`Buying WETH: estimated receive ${preview.estimatedReceiveNano} nano, impact ${preview.priceImpactPercent}%`);
 
 // 4. Execute
 const execution = await client.executeTrade({
   action: 'BUY',
   tokenAddress: weth.address,
   amountNano,
-  slippageTolerance: 0.01,
 });
 
 console.log('Trade started, operationId:', execution.operationId);
 
 // 5. Poll status
-let status: OperationStatus;
+let status;
 do {
   await new Promise(r => setTimeout(r, 5000));
   status = await client.getOperationStatus(execution.operationId);
@@ -293,8 +334,10 @@ do {
 
 if (status.status === 'confirmed') {
   console.log('Trade confirmed! Received:', status.actualTokenAmountNano, 'nano WETH');
+} else if (status.status === 'adjusted') {
+  console.log('Trade adjusted. Actual received:', status.actualTokenAmountNano);
 } else {
-  console.log('Trade ended with status:', status.status, status.failureReason);
+  console.log('Trade failed:', status.failureReason);
 }
 ```
 
@@ -310,8 +353,7 @@ const client = await TractionEyeClient.create({
 });
 
 const tools = createTractionEyeTools(client);
-// Pass tools to your agent framework (OpenAI, OpenClaw, etc.)
-// The model will choose when to call preview, execute, poll, etc.
+// Pass tools to your agent framework (OpenAI, LangChain, etc.)
 ```
 
 Available tools:
@@ -340,7 +382,7 @@ TractionEyeClient (SDK)
 TractionEye Backend API
     │
     ▼
-Ston.fi (swaps)
+Ston.fi (swaps on TON)
 ```
 
 Backend is the single source of truth: it validates trades, calculates PnL, and executes swaps. SDK is a thin adapter layer only.
