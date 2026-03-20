@@ -2,6 +2,35 @@
 
 TypeScript SDK for TractionEye trading agents. Provides a clean, high-level interface for managing trading strategies without knowing internal API endpoints.
 
+## How it works — Token model
+
+**This SDK does not manage wallets or private keys.** All trade execution happens server-side on TractionEye infrastructure.
+
+Authentication works via an **Agent Token** — a secret string that binds the SDK client to a specific trading strategy.
+
+```
+Strategy Owner (human) ──generates──▶ Agent Token
+                                            │
+                                            ▼
+                              Agent / Bot receives token
+                                            │
+                                            ▼
+                          TractionEyeClient.create({ agentToken })
+                                            │
+                                            ▼
+                              Trades execute on that strategy
+```
+
+> **If you are building an AI agent or trading bot:**
+> You must ask the strategy owner to generate a token for you.
+> Without a token from a real TractionEye strategy, the SDK cannot connect.
+>
+> **Steps for the strategy owner:**
+> 1. Open TractionEye in Telegram
+> 2. Go to their strategy → **Edit Strategy**
+> 3. Tap **Generate Token**
+> 4. Send the token to you (the agent/bot developer)
+
 ## Install
 
 ```bash
