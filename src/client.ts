@@ -107,9 +107,19 @@ function toOperationStatus(raw?: string): OperationStatusType {
   return 'pending';
 }
 
+// ─── Operation context (in-memory, survives within a single client instance) ──
+
+type OperationContext = {
+  swapType: TradeAction;
+  tokenAddress: string;
+};
+
 // ─── Client ────────────────────────────────────────────────────────────────
 
 export class TractionEyeClient {
+  /** In-memory map: operationId → execution context (swapType, tokenAddress). */
+  private readonly _opContext = new Map<string, OperationContext>();
+
   private constructor(
     private readonly http: TractionEyeHttpClient,
     public readonly strategyId: string,
@@ -165,6 +175,10 @@ export class TractionEyeClient {
     };
   }
 
+  /**
+   * Returns the first page of tradeable tokens (up to `limit`, default 200).
+   * Use `findToken()` for symbol-based lookup instead of loading the full catalog.
+   */
   async getAvailableTokens(limit = 200, offset = 0): Promise<AvailableToken[]> {
     logMethodCall('getAvailableTokens', { limit, offset });
     const r = await this.http.get<StonfiAssetsResponse>(
@@ -178,7 +192,7 @@ export class TractionEyeClient {
   }
 
   /**
-   * Find a token by symbol. Use this to resolve symbol → address before trading.
+   * Find a token by symbol. Preferred way to resolve symbol → address before trading.
    * Example: const weth = await client.findToken('WETH');
    */
   async findToken(symbol: string): Promise<AvailableToken | null> {
@@ -210,8 +224,6 @@ export class TractionEyeClient {
         amount_nano: req.amountNano,
       });
     } catch (e) {
-      // Backend returns 400 with code=simulation_failed when trade is rejected
-      // (e.g., insufficient position size, no quotes). Convert to TradePreview with rejected outcome.
       if (e instanceof TractionEyeHttpError && e.status === 400) {
         const body = e.body as { code?: string; details?: { validation_outcome?: string } } | undefined;
         if (body?.code === 'simulation_failed') {
@@ -257,10 +269,18 @@ export class TractionEyeClient {
       idempotency_key: idempotencyKey,
     });
 
+    const operationId = res.operation_id ?? idempotencyKey;
+
+    // Store context so getOperationStatus() can return correct swapType + tokenAddress
+    this._opContext.set(operationId, {
+      swapType: req.action,
+      tokenAddress: req.tokenAddress,
+    });
+
     const result = res.execution_result;
 
     return {
-      operationId: res.operation_id ?? idempotencyKey,
+      operationId,
       initialStatus: 'pending',
       swapType: req.action,
       tokenAddress: req.tokenAddress,
@@ -279,11 +299,21 @@ export class TractionEyeClient {
     const res = await this.http.get<AgentOperationResponse>(`/agent/operation/${operationId}`);
     const result = res.execution_result;
 
+    // Retrieve execution context stored at executeTrade() time
+    const ctx = this._opContext.get(operationId);
+
+    const status = toOperationStatus(res.operation_status);
+
+    // Clean up context once operation reaches a terminal state
+    if (status !== 'pending') {
+      this._opContext.delete(operationId);
+    }
+
     return {
       operationId,
-      status: toOperationStatus(res.operation_status),
-      swapType: 'BUY',
-      tokenAddress: '',
+      status,
+      swapType: ctx?.swapType ?? 'BUY',
+      tokenAddress: ctx?.tokenAddress ?? '',
       actualTokenAmountNano: result?.actual_token_amount != null
         ? String(result.actual_token_amount)
         : undefined,
