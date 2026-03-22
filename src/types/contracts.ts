@@ -1,6 +1,8 @@
 export type TractionEyeClientConfig = {
   agentToken: string;
   baseUrl?: string;
+  /** Enable dry-run simulation mode. Default: false. */
+  dryRun?: boolean;
 };
 
 export type StrategySummary = {

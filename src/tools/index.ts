@@ -1,5 +1,6 @@
 import type { TractionEyeClient } from '../client.js';
 import type { TradeAction } from '../types/contracts.js';
+import type { ScreeningSource } from '../screening/types.js';
 
 type Tool = {
   name: string;
@@ -10,6 +11,7 @@ type Tool = {
 
 export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
   return [
+    // ── Existing tools (unchanged) ───────────────────────────────────────
     {
       name: 'tractioneye_get_strategy_summary',
       description: 'Use this to get current performance metrics of the strategy you are managing (PnL, win rate, TON in strategy, drawdown, etc.). Call it before making trading decisions.',
@@ -62,7 +64,7 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
     },
     {
       name: 'tractioneye_execute_trade',
-      description: 'Use this to execute a BUY or SELL trade after you have checked the preview and validation outcome. This will start an operation that you should track with get_operation_status.',
+      description: 'Use this to execute a BUY or SELL trade after you have checked the preview and validation outcome. In dry-run mode records a virtual trade instead. Track with get_operation_status.',
       parameters: {
         type: 'object',
         properties: {
@@ -91,6 +93,104 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
         additionalProperties: false,
       },
       handler: async (args) => client.getOperationStatus(args['operationId'] as string),
+    },
+
+    // ── New tools (GeckoTerminal analytics) ──────────────────────────────
+
+    {
+      name: 'tractioneye_screen_tokens',
+      description: 'Screen TON tokens/pools by criteria: liquidity, volume, price change (1h/6h/24h), transactions, buy/sell ratio. Returns matching pools from GeckoTerminal.',
+      parameters: {
+        type: 'object',
+        properties: {
+          minLiquidityUsd: { type: 'number', description: 'Minimum pool liquidity in USD' },
+          maxLiquidityUsd: { type: 'number', description: 'Maximum pool liquidity in USD' },
+          minVolume24hUsd: { type: 'number', description: 'Minimum 24h volume in USD' },
+          priceChange1h: {
+            type: 'object',
+            properties: { min: { type: 'number' }, max: { type: 'number' } },
+            description: 'Price change 1h range (%)',
+          },
+          priceChange6h: {
+            type: 'object',
+            properties: { min: { type: 'number' }, max: { type: 'number' } },
+            description: 'Price change 6h range (%)',
+          },
+          priceChange24h: {
+            type: 'object',
+            properties: { min: { type: 'number' }, max: { type: 'number' } },
+            description: 'Price change 24h range (%)',
+          },
+          minTransactions24h: { type: 'number', description: 'Min transactions in 24h' },
+          minBuySellRatio: { type: 'number', description: 'Min buy/sell ratio (e.g. 1.5)' },
+          sources: {
+            type: 'array',
+            items: { type: 'string', enum: ['pools', 'trending', 'new_pools'] },
+            description: 'Sources to scan (default: all)',
+          },
+        },
+        additionalProperties: false,
+      },
+      handler: async (args) => {
+        const sources = args['sources'] as ScreeningSource[] | undefined;
+        return client.screenTokens({
+          filter: {
+            minLiquidityUsd: args['minLiquidityUsd'] as number | undefined,
+            maxLiquidityUsd: args['maxLiquidityUsd'] as number | undefined,
+            minVolume24hUsd: args['minVolume24hUsd'] as number | undefined,
+            priceChange1h: args['priceChange1h'] as { min?: number; max?: number } | undefined,
+            priceChange6h: args['priceChange6h'] as { min?: number; max?: number } | undefined,
+            priceChange24h: args['priceChange24h'] as { min?: number; max?: number } | undefined,
+            minTransactions24h: args['minTransactions24h'] as number | undefined,
+            minBuySellRatio: args['minBuySellRatio'] as number | undefined,
+          },
+          sources,
+        });
+      },
+    },
+    {
+      name: 'tractioneye_search_pools',
+      description: 'Search TON pools by keyword (token name, symbol, etc.) on GeckoTerminal.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+      handler: async (args) => client.searchPools(args['query'] as string),
+    },
+    {
+      name: 'tractioneye_get_trending_pools',
+      description: 'Get currently trending pools on TON DEX from GeckoTerminal.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => client.getTrendingPools(),
+    },
+    {
+      name: 'tractioneye_get_new_pools',
+      description: 'Get newly created pools on TON DEX from GeckoTerminal.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => client.getNewPools(),
+    },
+    {
+      name: 'tractioneye_get_token_price',
+      description: 'Get current USD price for a token by its contract address via GeckoTerminal.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tokenAddress: { type: 'string', description: 'Token contract address' },
+        },
+        required: ['tokenAddress'],
+        additionalProperties: false,
+      },
+      handler: async (args) => client.getTokenPriceUsd(args['tokenAddress'] as string),
+    },
+    {
+      name: 'tractioneye_get_simulation_results',
+      description: 'Get dry-run simulation results: win rate, average P&L, recommended TP/SL/position size parameters. Only available in dry-run mode.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => client.getSimulationResults(),
     },
   ];
 }
