@@ -5,8 +5,8 @@
  * and copies the skill file into the OpenClaw agent workspace.
  */
 
-const { mkdirSync, existsSync, writeFileSync, copyFileSync } = require('node:fs');
-const { join, dirname } = require('node:path');
+const { mkdirSync, existsSync, writeFileSync } = require('node:fs');
+const { join } = require('node:path');
 const { homedir } = require('node:os');
 const { execSync } = require('node:child_process');
 
@@ -42,18 +42,6 @@ if (!existsSync(CONFIG_PATH)) {
   console.log(`[setup] Created default config: ${CONFIG_PATH}`);
 } else {
   console.log(`[setup] Config already exists: ${CONFIG_PATH}`);
-}
-
-// Copy skill into OpenClaw agent workspace
-// Detect workspace: cwd (if inside agent workspace) or ~/.openclaw/workspace (default)
-const skillSource = join(__dirname, '..', 'skills', 'trading.md');
-if (existsSync(skillSource)) {
-  const workspaceSkillsDir = join(process.cwd(), 'skills', 'tractioneye');
-  mkdirSync(workspaceSkillsDir, { recursive: true });
-  copyFileSync(skillSource, join(workspaceSkillsDir, 'SKILL.md'));
-  console.log(`[setup] Skill installed: ${join(workspaceSkillsDir, 'SKILL.md')}`);
-} else {
-  console.log('[setup] Skill file not found, skipping skill installation');
 }
 
 // Check for pm2
