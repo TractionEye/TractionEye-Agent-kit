@@ -7,12 +7,18 @@
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts",
     "check": "tsc --noEmit",
-    "dev": "tsup src/index.ts --watch --format esm,cjs --dts"
+    "dev": "tsup src/index.ts --watch --format esm,cjs --dts",
+    "postinstall": "node scripts/setup-daemon.cjs",
+    "daemon": "npx tsx scripts/agent-daemon.ts",
+    "daemon:start": "pm2 start npx --name tractioneye -- tsx scripts/agent-daemon.ts",
+    "daemon:stop": "pm2 stop tractioneye",
+    "daemon:status": "pm2 status tractioneye"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

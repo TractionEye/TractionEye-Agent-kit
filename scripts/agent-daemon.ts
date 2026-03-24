@@ -1,0 +1,350 @@
+#!/usr/bin/env node
+/**
+ * TractionEye Agent Daemon
+ *
+ * Single process, two functions:
+ * 1. TP/SL monitoring — continuous price polling, auto-sells on trigger
+ * 2. Screening + briefing — periodic market scan → briefing.json
+ *
+ * Reads config from ~/.tractioneye/config.json
+ * Writes briefing to ~/.tractioneye/briefing.json
+ */
+
+import { writeFileSync, watchFile } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { TractionEyeClient } from '../src/client.js';
+import { RateLimiter } from '../src/rate-limiter.js';
+import { GeckoTerminalClient } from '../src/gecko/client.js';
+import { TokenScreener } from '../src/screening/screener.js';
+import { PositionManager } from '../src/position/manager.js';
+import type { PositionEvent } from '../src/position/types.js';
+import type { PoolInfo } from '../src/gecko/types.js';
+import type { ScreeningFilter } from '../src/screening/types.js';
+import {
+  readConfig,
+  briefingPath,
+  configPath,
+  ensureDataDir,
+  type DaemonConfig,
+  type TpSlConfig,
+} from '../src/config.js';
+
+// ── Constants ──────────────────────────────────────────────────────────────
+
+const DEFAULT_SCREENING_INTERVAL_MS = 180_000; // 3 minutes
+const TP_SL_POLL_INTERVAL_MS = 10_000; // 10 seconds
+
+/** Hardcoded junk filter — pools that don't pass are discarded before agent criteria. */
+const JUNK_FILTER: ScreeningFilter = {
+  minLiquidityUsd: 1000,
+  minVolume24hUsd: 0.01, // > 0
+};
+
+// ── State ──────────────────────────────────────────────────────────────────
+
+let config: DaemonConfig;
+let client: TractionEyeClient | null = null;
+let gecko: GeckoTerminalClient;
+let screener: TokenScreener;
+let positionManager: PositionManager | null = null;
+let limiter: RateLimiter;
+let screeningTimer: ReturnType<typeof setInterval> | null = null;
+
+// ── Main ───────────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  ensureDataDir();
+  config = readConfig();
+
+  if (!config.agentToken) {
+    console.log('[daemon] No agentToken in config. Waiting for agent to set it...');
+    // Watch config for changes — agent will write agentToken on first run
+    watchFile(configPath(), { interval: 5000 }, () => {
+      config = readConfig();
+      if (config.agentToken) {
+        console.log('[daemon] agentToken detected, starting...');
+        void startup();
+      }
+    });
+    return;
+  }
+
+  await startup();
+}
+
+async function startup(): Promise<void> {
+  try {
+    client = await TractionEyeClient.create({ agentToken: config.agentToken! });
+    console.log(`[daemon] Connected to strategy: ${client.strategyName}`);
+  } catch (err) {
+    console.error('[daemon] Failed to connect:', err);
+    process.exit(1);
+  }
+
+  limiter = client.limiter;
+  gecko = client.gecko;
+  screener = client.screener;
+
+  // Start TP/SL monitoring
+  startTpSlMonitor();
+
+  // Start screening loop
+  startScreeningLoop();
+
+  // Watch config file for TP/SL parameter changes
+  watchFile(configPath(), { interval: 5000 }, () => {
+    console.log('[daemon] Config changed, reloading...');
+    config = readConfig();
+    restartTpSlMonitor();
+  });
+
+  console.log('[daemon] Running.');
+}
+
+// ── TP/SL Monitoring ───────────────────────────────────────────────────────
+
+function buildPositionConfig(tpSl?: TpSlConfig) {
+  const defaults = tpSl?.defaults ?? { takeProfitPercent: 25, stopLossPercent: 8 };
+  return {
+    takeProfitPercent: defaults.takeProfitPercent,
+    stopLossPercent: defaults.stopLossPercent,
+    partialTpTrigger: defaults.partialTakeProfitPercent,
+    partialTpPercent: defaults.partialTakeProfitSellPercent,
+  };
+}
+
+function startTpSlMonitor(): void {
+  if (!client) return;
+
+  const posConfig = buildPositionConfig(config.tpSl);
+
+  const executor = async (tokenAddress: string, _action: 'BUY' | 'SELL', sellPercent: number) => {
+    if (!client) return;
+    const portfolio = await client.getPortfolio();
+    const token = portfolio.tokens.find((t) => t.address === tokenAddress);
+    if (!token) return;
+
+    const fullQty = BigInt(token.quantity);
+    const sellQty = sellPercent >= 100
+      ? fullQty
+      : (fullQty * BigInt(Math.round(sellPercent * 100))) / 10000n;
+    if (sellQty <= 0n) return;
+
+    await client.executeTrade({
+      action: 'SELL',
+      tokenAddress,
+      amountNano: sellQty.toString(),
+    });
+  };
+
+  const onEvent = (event: PositionEvent) => {
+    console.log(`[daemon] ${event.type}: ${event.symbol} ${event.changePercent.toFixed(2)}%`);
+    notifyAgent(event);
+  };
+
+  positionManager = new PositionManager(
+    gecko,
+    posConfig,
+    executor,
+    onEvent,
+    { intervalMs: TP_SL_POLL_INTERVAL_MS },
+  );
+
+  // Load positions from portfolio
+  void loadPositions().then(() => {
+    positionManager?.start();
+    console.log('[daemon] TP/SL monitor started');
+  });
+}
+
+async function loadPositions(): Promise<void> {
+  if (!client || !positionManager) return;
+  try {
+    const portfolio = await client.getPortfolio();
+    for (const t of portfolio.tokens) {
+      if (t.entryPriceTon == null) continue;
+      try {
+        const tokenPrice = await gecko.getTokenPrice(t.address);
+        if (tokenPrice.priceUsd == null) continue;
+        const currentValueTon = Number(t.currentValueTon ?? 0);
+        const entryPriceTon = Number(t.entryPriceTon);
+        const ratio = entryPriceTon > 0 && currentValueTon > 0
+          ? entryPriceTon / currentValueTon
+          : 1;
+        const entryPriceUsd = tokenPrice.priceUsd * ratio;
+
+        positionManager.addPosition({
+          tokenAddress: t.address,
+          symbol: t.symbol,
+          entryPriceUsd,
+          quantity: t.quantity,
+          partialTpTriggered: false,
+        });
+      } catch {
+        // Skip token if price fetch fails
+      }
+    }
+  } catch (err) {
+    console.error('[daemon] Failed to load positions:', err);
+  }
+}
+
+function restartTpSlMonitor(): void {
+  if (positionManager?.isRunning) {
+    // Preserve existing positions
+    const positions = positionManager.getPositions();
+    positionManager.stop();
+    startTpSlMonitor();
+    // Re-add preserved positions
+    for (const pos of positions) {
+      positionManager?.addPosition(pos);
+    }
+  }
+}
+
+function notifyAgent(event: PositionEvent): void {
+  const sessionId = config.sessionId;
+  const openclawPath = config.openclawPath ?? 'openclaw';
+  if (!sessionId) {
+    console.log('[daemon] No sessionId configured, skipping agent notification');
+    return;
+  }
+
+  const pos = positionManager?.getPositions().find((p) => p.tokenAddress === event.tokenAddress);
+  const payload = JSON.stringify({
+    event: 'tp_sl_triggered',
+    type: event.type,
+    tokenAddress: event.tokenAddress,
+    symbol: event.symbol,
+    entryPriceUsd: event.entryPriceUsd,
+    exitPriceUsd: event.currentPriceUsd,
+    pnlPercent: event.changePercent,
+    soldPercent: event.sellPercent,
+    timestamp: new Date().toISOString(),
+  });
+
+  const message = `Сохрани в дневную память за сегодня событие сделки: ${payload}`;
+
+  execFile(openclawPath, ['agent', '--session-id', sessionId, '--message', message], (err) => {
+    if (err) {
+      console.error('[daemon] Failed to notify agent:', err.message);
+    }
+  });
+}
+
+// ── Screening + Briefing ───────────────────────────────────────────────────
+
+function startScreeningLoop(): void {
+  const interval = config.screening?.intervalMs ?? DEFAULT_SCREENING_INTERVAL_MS;
+  // Run immediately
+  void runScreening();
+  screeningTimer = setInterval(() => void runScreening(), interval);
+  console.log(`[daemon] Screening loop started (interval: ${interval}ms)`);
+}
+
+async function runScreening(): Promise<void> {
+  if (!client) return;
+
+  try {
+    // Fetch pools from all sources
+    const [trending, newPools, pools] = await Promise.all([
+      gecko.getTrendingPools(),
+      gecko.getNewPools(),
+      gecko.getPools(),
+    ]);
+
+    // Deduplicate
+    const seen = new Set<string>();
+    const allPools: PoolInfo[] = [];
+    for (const p of [...trending, ...newPools, ...pools]) {
+      if (!seen.has(p.poolAddress)) {
+        seen.add(p.poolAddress);
+        allPools.push(p);
+      }
+    }
+
+    // Junk filter (hardcoded)
+    let candidates = allPools.filter((p) => {
+      if (p.reserveInUsd < (JUNK_FILTER.minLiquidityUsd ?? 0)) return false;
+      if (p.volume24hUsd <= 0) return false;
+      // locked_liquidity_percentage = 0% (explicitly unlocked) → reject
+      // null (no data) → keep
+      if (p.lockedLiquidityPercent === 0) return false;
+      return true;
+    });
+
+    // Agent criteria filter from config
+    const agentFilter = config.screening?.filter as ScreeningFilter | undefined;
+    if (agentFilter) {
+      // Import matchesFilter logic via screener
+      const screenResult = await screener.screen({
+        filter: agentFilter,
+        sources: [], // no fetch — we'll filter manually
+      });
+      // Since sources=[] returns nothing, filter candidates manually
+      candidates = candidates.filter((pool) => {
+        // Re-check agent filter criteria inline
+        return passesFilter(pool, agentFilter);
+      });
+    }
+
+    // Fetch portfolio + strategy
+    const [portfolio, strategy] = await Promise.all([
+      client.getPortfolio(),
+      client.getStrategySummary(),
+    ]);
+
+    // Write briefing
+    const briefing = {
+      timestamp: new Date().toISOString(),
+      candidates,
+      portfolio,
+      strategy,
+      openSlots: (config.tpSl?.defaults as Record<string, unknown>)?.maxOpenPositions ?? null,
+    };
+
+    writeFileSync(briefingPath(), JSON.stringify(briefing, null, 2) + '\n', 'utf-8');
+  } catch (err) {
+    console.error('[daemon] Screening error:', err);
+  }
+}
+
+/** Inline filter check matching ScreeningFilter logic from screener.ts */
+function passesFilter(pool: PoolInfo, f: ScreeningFilter): boolean {
+  if (f.minLiquidityUsd != null && pool.reserveInUsd < f.minLiquidityUsd) return false;
+  if (f.maxLiquidityUsd != null && pool.reserveInUsd > f.maxLiquidityUsd) return false;
+  if (f.minVolume24hUsd != null && pool.volume24hUsd < f.minVolume24hUsd) return false;
+  if (f.minFdvUsd != null && (pool.fdvUsd == null || pool.fdvUsd < f.minFdvUsd)) return false;
+  if (f.maxFdvUsd != null && pool.fdvUsd != null && pool.fdvUsd > f.maxFdvUsd) return false;
+  if (f.minMarketCapUsd != null && (pool.marketCapUsd == null || pool.marketCapUsd < f.minMarketCapUsd)) return false;
+  if (f.maxMarketCapUsd != null && pool.marketCapUsd != null && pool.marketCapUsd > f.maxMarketCapUsd) return false;
+  if (f.minLockedLiquidityPercent != null && (pool.lockedLiquidityPercent == null || pool.lockedLiquidityPercent < f.minLockedLiquidityPercent)) return false;
+
+  const ranges: Array<[number, { min?: number; max?: number } | undefined]> = [
+    [pool.priceChange5m, f.priceChange5m],
+    [pool.priceChange15m, f.priceChange15m],
+    [pool.priceChange30m, f.priceChange30m],
+    [pool.priceChange1h, f.priceChange1h],
+    [pool.priceChange6h, f.priceChange6h],
+    [pool.priceChange24h, f.priceChange24h],
+  ];
+  for (const [value, range] of ranges) {
+    if (range) {
+      if (range.min != null && value < range.min) return false;
+      if (range.max != null && value > range.max) return false;
+    }
+  }
+
+  if (f.minTransactions24h != null && pool.transactions24h < f.minTransactions24h) return false;
+  if (f.minBuySellRatio != null && pool.buySellRatio < f.minBuySellRatio) return false;
+  if (f.minUniqueBuyers24h != null && pool.uniqueBuyers24h < f.minUniqueBuyers24h) return false;
+
+  return true;
+}
+
+// ── Start ──────────────────────────────────────────────────────────────────
+
+main().catch((err) => {
+  console.error('[daemon] Fatal error:', err);
+  process.exit(1);
+});

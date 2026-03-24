@@ -4,8 +4,24 @@ export type ScreeningFilter = {
   minLiquidityUsd?: number;
   /** Maximum pool reserve (liquidity) in USD. */
   maxLiquidityUsd?: number;
+  /** Minimum fully diluted valuation in USD. */
+  minFdvUsd?: number;
+  /** Maximum fully diluted valuation in USD. */
+  maxFdvUsd?: number;
+  /** Minimum market cap in USD. */
+  minMarketCapUsd?: number;
+  /** Maximum market cap in USD. */
+  maxMarketCapUsd?: number;
+  /** Minimum locked liquidity percentage (e.g. 50 = 50%). */
+  minLockedLiquidityPercent?: number;
   /** Minimum 24h trading volume in USD. */
   minVolume24hUsd?: number;
+  /** Price change 5m range (min/max %). */
+  priceChange5m?: { min?: number; max?: number };
+  /** Price change 15m range (min/max %). */
+  priceChange15m?: { min?: number; max?: number };
+  /** Price change 30m range (min/max %). */
+  priceChange30m?: { min?: number; max?: number };
   /** Price change 1h range (min/max %). */
   priceChange1h?: { min?: number; max?: number };
   /** Price change 6h range (min/max %). */
@@ -16,6 +32,8 @@ export type ScreeningFilter = {
   minTransactions24h?: number;
   /** Minimum buy/sell ratio (e.g. 1.5 = 1.5× more buys than sells). */
   minBuySellRatio?: number;
+  /** Minimum unique buyers in 24h. */
+  minUniqueBuyers24h?: number;
 };
 
 /** Sources to include when screening. */

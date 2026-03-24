@@ -23,7 +23,28 @@ export { RateLimiter, RequestPriority } from './rate-limiter.js';
 
 // GeckoTerminal
 export { GeckoTerminalClient } from './gecko/index.js';
-export type { PoolInfo, TokenPrice } from './gecko/index.js';
+export type {
+  PoolInfo,
+  TokenPrice,
+  TradeInfo,
+  OhlcvCandle,
+  OhlcvResponse,
+  OhlcvMeta,
+  OhlcvTimeframe,
+} from './gecko/index.js';
+
+// Config
+export {
+  DEFAULT_DATA_DIR,
+  configPath,
+  briefingPath,
+  readConfig,
+  writeConfig,
+  updateConfig,
+  readBriefing,
+  ensureDataDir,
+} from './config.js';
+export type { DaemonConfig, TpSlConfig, TpSlDefaults } from './config.js';
 
 // Screening
 export { TokenScreener } from './screening/index.js';

@@ -49,26 +49,35 @@ export class TokenScreener {
   }
 }
 
+function checkRange(value: number, range?: { min?: number; max?: number }): boolean {
+  if (!range) return true;
+  if (range.min != null && value < range.min) return false;
+  if (range.max != null && value > range.max) return false;
+  return true;
+}
+
 function matchesFilter(pool: PoolInfo, f: ScreeningFilter): boolean {
   if (f.minLiquidityUsd != null && pool.reserveInUsd < f.minLiquidityUsd) return false;
   if (f.maxLiquidityUsd != null && pool.reserveInUsd > f.maxLiquidityUsd) return false;
   if (f.minVolume24hUsd != null && pool.volume24hUsd < f.minVolume24hUsd) return false;
 
-  if (f.priceChange1h) {
-    if (f.priceChange1h.min != null && pool.priceChange1h < f.priceChange1h.min) return false;
-    if (f.priceChange1h.max != null && pool.priceChange1h > f.priceChange1h.max) return false;
-  }
-  if (f.priceChange6h) {
-    if (f.priceChange6h.min != null && pool.priceChange6h < f.priceChange6h.min) return false;
-    if (f.priceChange6h.max != null && pool.priceChange6h > f.priceChange6h.max) return false;
-  }
-  if (f.priceChange24h) {
-    if (f.priceChange24h.min != null && pool.priceChange24h < f.priceChange24h.min) return false;
-    if (f.priceChange24h.max != null && pool.priceChange24h > f.priceChange24h.max) return false;
-  }
+  // FDV / market cap / locked liquidity — skip check if pool value is null (no data)
+  if (f.minFdvUsd != null && (pool.fdvUsd == null || pool.fdvUsd < f.minFdvUsd)) return false;
+  if (f.maxFdvUsd != null && pool.fdvUsd != null && pool.fdvUsd > f.maxFdvUsd) return false;
+  if (f.minMarketCapUsd != null && (pool.marketCapUsd == null || pool.marketCapUsd < f.minMarketCapUsd)) return false;
+  if (f.maxMarketCapUsd != null && pool.marketCapUsd != null && pool.marketCapUsd > f.maxMarketCapUsd) return false;
+  if (f.minLockedLiquidityPercent != null && (pool.lockedLiquidityPercent == null || pool.lockedLiquidityPercent < f.minLockedLiquidityPercent)) return false;
+
+  if (!checkRange(pool.priceChange5m, f.priceChange5m)) return false;
+  if (!checkRange(pool.priceChange15m, f.priceChange15m)) return false;
+  if (!checkRange(pool.priceChange30m, f.priceChange30m)) return false;
+  if (!checkRange(pool.priceChange1h, f.priceChange1h)) return false;
+  if (!checkRange(pool.priceChange6h, f.priceChange6h)) return false;
+  if (!checkRange(pool.priceChange24h, f.priceChange24h)) return false;
 
   if (f.minTransactions24h != null && pool.transactions24h < f.minTransactions24h) return false;
   if (f.minBuySellRatio != null && pool.buySellRatio < f.minBuySellRatio) return false;
+  if (f.minUniqueBuyers24h != null && pool.uniqueBuyers24h < f.minUniqueBuyers24h) return false;
 
   return true;
 }

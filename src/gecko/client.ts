@@ -4,6 +4,12 @@ import type {
   GeckoPoolsResponse,
   GeckoSearchResponse,
   GeckoTokensResponse,
+  GeckoTradesResponse,
+  GeckoOhlcvResponse,
+  OhlcvTimeframe,
+  OhlcvResponse,
+  OhlcvCandle,
+  TradeInfo,
   PoolInfo,
   TokenPrice,
 } from './types.js';
@@ -56,13 +62,27 @@ export class GeckoTerminalClient {
       name: p.attributes.name,
       baseTokenPriceUsd: '0',
       reserveInUsd: num(p.attributes.reserve_in_usd),
+      fdvUsd: null,
+      marketCapUsd: null,
+      lockedLiquidityPercent: null,
       volume24hUsd: num(p.attributes.volume_usd.h24),
+      volume6hUsd: 0,
+      volume1hUsd: 0,
+      priceChange5m: 0,
+      priceChange15m: 0,
+      priceChange30m: 0,
       priceChange1h: 0,
       priceChange6h: 0,
       priceChange24h: num(p.attributes.price_change_percentage.h24),
       transactions24h: 0,
       buys24h: 0,
       sells24h: 0,
+      uniqueBuyers1h: 0,
+      uniqueBuyers6h: 0,
+      uniqueBuyers24h: 0,
+      uniqueSellers1h: 0,
+      uniqueSellers6h: 0,
+      uniqueSellers24h: 0,
       buySellRatio: 0,
       createdAt: '',
     }));
@@ -77,6 +97,55 @@ export class GeckoTerminalClient {
       priority,
     );
     return data.data.map(mapPool);
+  }
+
+  // ---------- Trades & OHLCV endpoints ----------
+
+  /** Fetch recent trades for a pool. */
+  async getPoolTrades(
+    poolAddress: string,
+    options?: { tradeVolumeInUsdGreaterThan?: number },
+    priority = RequestPriority.High,
+  ): Promise<TradeInfo[]> {
+    let path = `/networks/${NETWORK}/pools/${poolAddress}/trades`;
+    if (options?.tradeVolumeInUsdGreaterThan != null) {
+      path += `?trade_volume_in_usd_greater_than=${options.tradeVolumeInUsdGreaterThan}`;
+    }
+    const data = await this.get<GeckoTradesResponse>(path, priority);
+    return data.data.map((t) => ({
+      kind: t.attributes.kind,
+      volumeInUsd: num(t.attributes.volume_in_usd),
+      txFromAddress: t.attributes.tx_from_address,
+      blockTimestamp: t.attributes.block_timestamp,
+      fromTokenAmount: num(t.attributes.from_token_amount),
+      toTokenAmount: num(t.attributes.to_token_amount),
+      priceFromInUsd: num(t.attributes.price_from_in_usd),
+      priceToInUsd: num(t.attributes.price_to_in_usd),
+    }));
+  }
+
+  /** Fetch OHLCV candles for a pool. */
+  async getPoolOhlcv(
+    poolAddress: string,
+    timeframe: OhlcvTimeframe = 'day',
+    limit = 30,
+    priority = RequestPriority.High,
+  ): Promise<OhlcvResponse> {
+    const data = await this.get<GeckoOhlcvResponse>(
+      `/networks/${NETWORK}/pools/${poolAddress}/ohlcv/${timeframe}?limit=${limit}`,
+      priority,
+    );
+    const candles: OhlcvCandle[] = data.data.attributes.ohlcv_list.map(
+      ([timestamp, open, high, low, close, volume]) => ({
+        timestamp,
+        open,
+        high,
+        low,
+        close,
+        volume,
+      }),
+    );
+    return { candles, meta: data.meta };
   }
 
   // ---------- Token endpoints ----------
@@ -134,6 +203,12 @@ function num(v: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function numOrNull(v: string | null | undefined): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function mapPool(p: GeckoPoolData): PoolInfo {
   const a = p.attributes;
   const buys = a.transactions.h24.buys;
@@ -143,13 +218,27 @@ function mapPool(p: GeckoPoolData): PoolInfo {
     name: a.name,
     baseTokenPriceUsd: a.base_token_price_usd,
     reserveInUsd: num(a.reserve_in_usd),
+    fdvUsd: numOrNull(a.fdv_usd),
+    marketCapUsd: numOrNull(a.market_cap_usd),
+    lockedLiquidityPercent: numOrNull(a.locked_liquidity_percentage),
     volume24hUsd: num(a.volume_usd.h24),
+    volume6hUsd: num(a.volume_usd.h6),
+    volume1hUsd: num(a.volume_usd.h1),
+    priceChange5m: num(a.price_change_percentage.m5),
+    priceChange15m: num(a.price_change_percentage.m15),
+    priceChange30m: num(a.price_change_percentage.m30),
     priceChange1h: num(a.price_change_percentage.h1),
     priceChange6h: num(a.price_change_percentage.h6),
     priceChange24h: num(a.price_change_percentage.h24),
     transactions24h: buys + sells,
     buys24h: buys,
     sells24h: sells,
+    uniqueBuyers1h: a.transactions.h1.buyers ?? 0,
+    uniqueBuyers6h: a.transactions.h6.buyers ?? 0,
+    uniqueBuyers24h: a.transactions.h24.buyers ?? 0,
+    uniqueSellers1h: a.transactions.h1.sellers ?? 0,
+    uniqueSellers6h: a.transactions.h6.sellers ?? 0,
+    uniqueSellers24h: a.transactions.h24.sellers ?? 0,
     buySellRatio: sells > 0 ? buys / sells : buys > 0 ? Infinity : 0,
     createdAt: a.pool_created_at,
     baseTokenId: p.relationships?.base_token?.data?.id,
