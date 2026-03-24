@@ -12,11 +12,10 @@
     "scripts"
   ],
   "scripts": {
-    "prepare": "tsup src/index.ts --format esm,cjs --dts",
     "build": "tsup src/index.ts --format esm,cjs --dts",
     "check": "tsc --noEmit",
     "dev": "tsup src/index.ts --watch --format esm,cjs --dts",
-    "postinstall": "node scripts/setup-daemon.cjs",
+    "postinstall": "node scripts/setup-daemon.cjs || true",
     "daemon": "npx tsx scripts/agent-daemon.ts",
     "daemon:start": "pm2 start npx --name tractioneye -- tsx scripts/agent-daemon.ts",
     "daemon:stop": "pm2 stop tractioneye",
