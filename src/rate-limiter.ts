@@ -29,7 +29,7 @@ export class RateLimiter {
   private queue: QueueEntry<unknown>[] = [];
   private draining = false;
 
-  constructor(maxTokens = 30, windowMs = 60_000, minIntervalMs = 4_000) {
+  constructor(maxTokens = 30, windowMs = 60_000, minIntervalMs = 2_000) {
     this.maxTokens = maxTokens;
     this.tokens = maxTokens;
     this.windowMs = windowMs;
