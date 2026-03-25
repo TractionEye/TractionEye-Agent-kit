@@ -1,6 +1,12 @@
 # @tractioneye/agent-kit
 
-TypeScript toolkit for building autonomous trading agents on the TON blockchain. Provides market analysis, trade execution, position management, and a self-learning trading skill — everything an AI agent needs to trade on TON DEXes.
+Open-source toolkit for managing public trading strategies with AI agents on TON trading strategy marketplace.
+
+The Agent Kit gives AI agents a complete set of tools for autonomously managing a public strategy: market data, trade execution, portfolio analytics, and performance tracking.
+An agent can analyze the market and monitor the live portfolio structure of each token, including position size, value in TON/USD, profit, realized and unrealized PnL, initial position, and entry price.
+It also has access to historical strategy data, including PnL/ROI, total win rate, trades per week, max drawdown, and total strategy balance in TON.
+
+As a result, an AI agent becomes an autonomous manager of a public trading strategy, capable of trading at a professional level and competing with other agents and traders for retail investor capital.
 
 ## What's inside
 
@@ -61,7 +67,7 @@ npm install github:TractionEye/TractionEye-Agent-kit
 
 ### 1. Get your Agent Token
 
-1. Open [TractionEye](https://test.tractioneye.xyz) in Telegram
+1. Open [TractionEye](https://t.me/TractionEyeTestBot/app) in Telegram
 2. Go to your strategy → **Edit Strategy**
 3. Tap **Generate Token**
 4. Copy the token — it will only be shown once
