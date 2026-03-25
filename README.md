@@ -1,417 +1,344 @@
-# @tractioneye/agent-sdk
+# @tractioneye/agent-kit
 
-TypeScript SDK for TractionEye trading agents. Provides a clean, high-level interface for managing trading strategies without knowing internal API endpoints.
+TypeScript toolkit for building autonomous trading agents on the TON blockchain. Provides market analysis, trade execution, position management, and a self-learning trading skill — everything an AI agent needs to trade on TON DEXes.
 
-## How it works — Token model
+## What's inside
 
-**This SDK does not manage wallets or private keys.** All trade execution happens server-side on TractionEye infrastructure.
+| Component | Description |
+|-----------|-------------|
+| **SDK client** | High-level interface to TractionEye strategy API — portfolio, trades, status |
+| **12 agent tools** | Ready-to-use tool definitions for LLM agents (OpenClaw, LangChain, OpenAI, etc.) |
+| **GeckoTerminal integration** | Real-time market data — pools, prices, OHLCV candles, trade history |
+| **Token screener** | Filter TON pools by liquidity, volume, FDV, price change, unique buyers, and more |
+| **Position manager** | Automated TP/SL monitoring with price polling |
+| **Background daemon** | Continuous market scanning + TP/SL execution between agent sessions |
+| **Trading skill** | Self-learning trading behavior definition with session algorithm |
+| **Simulation mode** | Dry-run trading for strategy testing before going live |
 
-Authentication works via an **Agent Token** — a secret string that binds the SDK client to a specific trading strategy.
+## How it works
 
 ```
-Strategy Owner (human) ──generates──▶ Agent Token
-                                            │
-                                            ▼
-                              Agent / Bot receives token
-                                            │
-                                            ▼
-                          TractionEyeClient.create({ agentToken })
-                                            │
-                                            ▼
-                              Trades execute on that strategy
+┌─────────────────────────────────────────────┐
+│  AI Agent (OpenClaw / LangChain / custom)   │
+│  Uses 12 tools + trading skill              │
+└──────────────────┬──────────────────────────┘
+                   │
+         ┌─────────▼──────────┐
+         │  Agent Kit (SDK)   │
+         │  TractionEyeClient │
+         └──┬─────────────┬───┘
+            │             │
+   ┌────────▼───┐   ┌────▼────────────┐
+   │ TractionEye│   │  GeckoTerminal  │
+   │ Backend API│   │  API (market    │
+   │ (trades,   │   │  data, pools,   │
+   │  portfolio)│   │  OHLCV, trades) │
+   └────────┬───┘   └────────────────┘
+            │
+   ┌────────▼───┐
+   │  Ston.fi   │
+   │  (swaps)   │
+   └────────────┘
+
+┌──────────────────────────────────────┐
+│  Background Daemon (pm2)             │
+│  • TP/SL monitoring 24/7             │
+│  • Market screening every 3 min     │
+│  • Writes briefing.json for agent   │
+│  • Auto-sells on TP/SL trigger      │
+└──────────────────────────────────────┘
 ```
 
-> **If you are building an AI agent or trading bot:**
-> You must ask the strategy owner to generate a token for you.
-> Without a token from a real TractionEye strategy, the SDK cannot connect.
->
-> **Steps for the strategy owner:**
-> 1. Open TractionEye in Telegram
-> 2. Go to their strategy → **Edit Strategy**
-> 3. Tap **Generate Token**
-> 4. Send the token to you (the agent/bot developer)
+> **This SDK does not manage wallets or private keys.** All trade execution happens server-side on TractionEye infrastructure.
 
 ## Install
 
 ```bash
-npm install @tractioneye/agent-sdk
+npm install github:TractionEye/agent-sdk
 ```
 
-> **Can't install from npm yet?** Clone and build locally — see [Local development](#local-development) below.
+## Quick start
 
----
-
-## Getting started
-
-### Step 1 — Get your Agent Token
-
-The SDK authenticates via an **Agent Token** tied to a specific TractionEye strategy.
+### 1. Get your Agent Token
 
 1. Open [TractionEye](https://test.tractioneye.xyz) in Telegram
-2. Go to your strategy → tap **Edit Strategy** (settings icon)
+2. Go to your strategy → **Edit Strategy**
 3. Tap **Generate Token**
 4. Copy the token — it will only be shown once
 
-> **One token = one strategy.** The client automatically reads `strategyId` from the token on startup.
-> To get a fresh token at any time, tap **Regenerate** — the old token is immediately revoked.
+> **One token = one strategy.** To get a fresh token, tap **Regenerate** — the old token is immediately revoked.
 
-### Step 2 — Set the environment variable
-
-```bash
-export TRACTIONEYE_AGENT_TOKEN=your_token_here
-```
-
-### Step 3 — Initialize the client
+### 2. Initialize the client
 
 ```ts
-import { TractionEyeClient } from '@tractioneye/agent-sdk';
+import { TractionEyeClient, createTractionEyeTools } from '@tractioneye/agent-sdk';
 
 const client = await TractionEyeClient.create({
-  agentToken: process.env.TRACTIONEYE_AGENT_TOKEN!,
+  agentToken: 'your-agent-token',
 });
 
-const summary = await client.getStrategySummary();
-console.log('Strategy:', summary.strategyName, '| TON in strategy:', summary.tonInStrategy);
+// For AI agents — get all 12 tools
+const tools = createTractionEyeTools(client);
+```
+
+### 3. Start the daemon
+
+The background daemon handles market screening and TP/SL monitoring between agent sessions.
+
+```bash
+# Fill in agentToken in ~/.tractioneye/config.json
+npm run daemon:start    # requires pm2
 ```
 
 ---
 
-## Local development
+## Agent Tools
 
-If the npm package is not yet available, run directly from source:
+`createTractionEyeTools(client)` returns 12 tools designed for LLM agents. Each tool has a description that tells the agent when and how to use it.
+
+### Trading session flow
+
+```
+read_briefing → analyze_pool → buy_token → set_tp_sl → get_status
+```
+
+### Tool reference
+
+| Tool | Description |
+|------|-------------|
+| `read_briefing` | Get filtered market candidates and portfolio from the background daemon. **Call first** on every trading session. |
+| `analyze_pool` | Deep-analyze a pool: OHLCV candles, trade history, whale wallet concentration. Call after briefing, before buying. |
+| `buy_token` | Buy a token. Handles resolve → preview → validate → execute → poll internally. |
+| `sell_token` | Sell a token (full or partial). Use `"all"` for amountNano to sell entire position. |
+| `set_tp_sl` | Set Take Profit / Stop Loss. The daemon monitors prices 24/7 and auto-sells when triggered. |
+| `update_screening_config` | Update screening criteria for the daemon's candidate selection. |
+| `get_status` | Get strategy performance (PnL, win rate, drawdown) and portfolio in one call. |
+| `screen_tokens` | Screen TON pools by criteria (liquidity, FDV, volume, price change, etc.). For ad-hoc use. |
+| `find` | Find a token by symbol or search pools by keyword. |
+| `get_token_price` | Get current USD price for a token. |
+| `get_available_tokens` | List tokens available for trading in this strategy. |
+| `get_simulation_results` | Get dry-run simulation results. Only available in simulation mode. |
+
+---
+
+## Trading Skill
+
+The kit includes a trading skill file at `skills/trading.md` that defines agent behavior:
+
+- **Session algorithm** — step-by-step: recall memory → briefing → deep analysis → buy → set TP/SL → save to memory → reflect
+- **Self-learning** — agent researches trading approaches, tests them, records verified lessons back into the skill
+- **Daily memory** — agent maintains continuity between cron sessions through structured memory
+- **Cron integration** — the skill specifies the cron message that triggers the session algorithm
+
+The skill is designed for [OpenClaw](https://openclaw.com) agents but the algorithm can be adapted for any agent framework.
+
+---
+
+## Background Daemon
+
+The daemon runs as a persistent process (via pm2) and performs two functions:
+
+### Market screening
+- Fetches trending, new, and general TON pools from GeckoTerminal every 3 minutes (configurable)
+- Applies junk filter (low liquidity, zero volume, unlocked liquidity)
+- Applies agent screening criteria from `~/.tractioneye/config.json`
+- Writes `~/.tractioneye/briefing.json` with candidates + portfolio + strategy state
+
+### TP/SL monitoring
+- Polls token prices continuously
+- Auto-sells when Take Profit or Stop Loss triggers
+- Notifies the agent via OpenClaw CLI with full trade details (token, prices, PnL, operationId)
+
+### Daemon commands
 
 ```bash
-git clone https://github.com/TractionEye/agent-sdk
-cd agent-sdk
-npm install
-npm run build
-
-export TRACTIONEYE_AGENT_TOKEN=your_token_here
-npx tsx examples/buy-flow.ts
+npm run daemon           # run in foreground
+npm run daemon:start     # start via pm2
+npm run daemon:stop      # stop
+npm run daemon:status    # check status
 ```
 
 ---
 
 ## Configuration
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `agentToken` | `string` | ✅ | Agent token from TractionEye Edit Strategy screen |
-| `baseUrl` | `string` | ❌ | Override API base URL. Default: `https://test.tractioneye.xyz/trust_api` |
+All configuration lives in `~/.tractioneye/config.json`:
+
+```json
+{
+  "agentToken": "your-token",
+  "sessionId": "openclaw-session-id",
+  "openclawPath": "openclaw",
+  "tpSl": {
+    "defaults": {
+      "takeProfitPercent": 25,
+      "stopLossPercent": 8
+    },
+    "perToken": {}
+  },
+  "screening": {
+    "intervalMs": 180000,
+    "filter": {
+      "minLiquidityUsd": 20000,
+      "minVolume24hUsd": 10000
+    }
+  }
+}
+```
+
+| Key | Description |
+|-----|-------------|
+| `agentToken` | Agent token from TractionEye strategy |
+| `sessionId` | OpenClaw session ID for daemon → agent notifications |
+| `openclawPath` | Path to OpenClaw CLI binary |
+| `tpSl.defaults` | Default TP/SL thresholds for all positions |
+| `tpSl.perToken` | Per-token TP/SL overrides |
+| `screening.intervalMs` | Market scan interval in milliseconds |
+| `screening.filter` | Screening criteria (same fields as `screen_tokens` tool) |
+
+The config is created automatically on `npm install` with sensible defaults.
 
 ---
 
-## API Reference
+## SDK Methods
 
-### `TractionEyeClient.create(config)`
+The client exposes these methods directly. Agent tools use them internally, but they are also available for custom integrations.
 
-Creates and initializes a client. Fetches `strategyId` from backend on startup.
+### Strategy & Portfolio
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `getStrategySummary()` | `StrategySummary` | PnL, win rate, balance, drawdown |
+| `getPortfolio()` | `PortfolioSummary` | Current positions with PnL |
+| `getAvailableTokens()` | `AvailableToken[]` | Tokens available for trading |
+| `findToken(symbol)` | `AvailableToken \| null` | Resolve symbol → address |
+
+### Trading
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `previewTrade(req)` | `TradePreview` | Simulate trade, get price impact and validation |
+| `executeTrade(req)` | `TradeExecution` | Execute trade, returns operationId |
+| `getOperationStatus(id)` | `OperationStatus` | Poll trade status until final |
+
+### Market Data (GeckoTerminal)
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `gecko.getTrendingPools()` | `PoolInfo[]` | Trending pools on TON |
+| `gecko.getNewPools()` | `PoolInfo[]` | Newly created pools |
+| `gecko.getPools()` | `PoolInfo[]` | General pool listing |
+| `gecko.getPoolTrades(addr)` | `TradeInfo[]` | Recent trades for a pool |
+| `gecko.getPoolOhlcv(addr, tf)` | `OhlcvResponse` | OHLCV candles (day/hour/minute) |
+| `gecko.getTokenPrice(addr)` | `TokenPrice` | Current token price |
+| `gecko.searchPools(query)` | `PoolInfo[]` | Search pools by keyword |
+
+### Screening & Position Management
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `screenTokens(config)` | `PoolInfo[]` | Screen pools by filter criteria |
+| `searchPools(query)` | `PoolInfo[]` | Search + filter pools |
+| `startPositionMonitor(...)` | `void` | Start TP/SL monitoring loop |
+| `stopPositionMonitor()` | `void` | Stop TP/SL monitoring |
+| `getSimulationResults()` | `SimulationResult \| null` | Dry-run results (simulation mode only) |
+
+---
+
+## Enriched Pool Data
+
+Every `PoolInfo` object includes:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `poolAddress` | `string` | Pool contract address |
+| `name` | `string` | Pool name |
+| `baseTokenPriceUsd` | `string` | Base token price in USD |
+| `reserveInUsd` | `number` | Total pool liquidity (USD) |
+| `fdvUsd` | `number \| null` | Fully diluted valuation |
+| `marketCapUsd` | `number \| null` | Market capitalization |
+| `lockedLiquidityPercent` | `number \| null` | Locked liquidity percentage |
+| `volume24hUsd` / `6h` / `1h` | `number` | Trading volume |
+| `priceChange5m` / `15m` / `30m` / `1h` / `6h` / `24h` | `number` | Price change (%) |
+| `transactions24h` | `number` | Total transactions in 24h |
+| `buys24h` / `sells24h` | `number` | Buy and sell counts |
+| `uniqueBuyers1h` / `6h` / `24h` | `number` | Unique buyer wallets |
+| `uniqueSellers1h` / `6h` / `24h` | `number` | Unique seller wallets |
+| `buySellRatio` | `number` | Buy/sell ratio |
+
+---
+
+## Screening Filters
+
+Used by `screen_tokens` tool and `update_screening_config`:
+
+| Filter | Type | Description |
+|--------|------|-------------|
+| `minLiquidityUsd` / `maxLiquidityUsd` | `number` | Pool liquidity range |
+| `minFdvUsd` / `maxFdvUsd` | `number` | FDV range |
+| `minMarketCapUsd` / `maxMarketCapUsd` | `number` | Market cap range |
+| `minLockedLiquidityPercent` | `number` | Minimum locked liquidity |
+| `minVolume24hUsd` | `number` | Minimum 24h volume |
+| `priceChange5m` / `15m` / `30m` / `1h` / `6h` / `24h` | `{min?, max?}` | Price change range (%) |
+| `minTransactions24h` | `number` | Minimum transactions |
+| `minBuySellRatio` | `number` | Minimum buy/sell ratio |
+| `minUniqueBuyers24h` | `number` | Minimum unique buyers |
+
+---
+
+## Simulation Mode
 
 ```ts
 const client = await TractionEyeClient.create({
   agentToken: 'your-token',
-  baseUrl: 'https://test.tractioneye.xyz/trust_api', // optional
+  dryRun: true,
 });
 ```
 
+In simulation mode:
+- `executeTrade()` records virtual trades instead of real ones
+- Portfolio reads come from the real backend (positions are not simulated)
+- `getSimulationResults()` returns win rate, average PnL, and recommended parameters
+- Use this to test strategies before committing real funds
+
 ---
 
-### `getStrategySummary()`
+## File Structure
 
-Returns aggregated performance metrics for the strategy.
-
-```ts
-const summary = await client.getStrategySummary();
 ```
-
-**Returns: `StrategySummary`**
-
-| Field | Type | Description |
-|---|---|---|
-| `strategyId` | `string` | Strategy ID |
-| `strategyName` | `string` | Strategy name |
-| `pnlDayTon` | `string` | PnL for the last 24h (TON) |
-| `pnlWeekTon` | `string` | PnL for the last 7 days (TON) |
-| `pnlMonthTon` | `string` | PnL for the last 30 days (TON) |
-| `pnlYearTon` | `string` | PnL for the last year (TON) |
-| `tonInStrategy` | `string` | Total TON under management |
-| `totalWinRate` | `number` | Win rate (0–1) |
-| `tradesPerWeek` | `number` | Average trades per week |
-| `maxDrawdown` | `number` | Maximum drawdown |
-| `lowBalanceState` | `boolean` | True if balance is critically low (< 0.35 TON) |
-
----
-
-### `getPortfolio()`
-
-Returns current token positions held in the strategy.
-
-```ts
-const portfolio = await client.getPortfolio();
-```
-
-**Returns: `PortfolioSummary`**
-
-| Field | Type | Description |
-|---|---|---|
-| `strategyId` | `string` | Strategy ID |
-| `totalRealizedPnlTon` | `string` | Total realized PnL (TON) |
-| `totalUnrealizedPnlTon` | `string` | Total unrealized PnL (TON) |
-| `tokens` | `TokenSummary[]` | Array of current positions |
-
-**`TokenSummary` fields:**
-
-| Field | Type | Description |
-|---|---|---|
-| `address` | `string` | Jetton address on TON |
-| `symbol` | `string` | Token symbol (e.g., `WETH`) |
-| `decimals` | `number` | Token decimals |
-| `quantity` | `string` | Position size in on-chain nano units |
-| `realizedPnlTon` | `string` | Realized PnL for this token (TON) |
-| `unrealizedPnlTon` | `string` | Unrealized PnL for this token (TON) |
-| `entryPriceTon` | `string?` | Average entry price (TON) |
-| `currentValueTon` | `string?` | Current position value (TON) |
-
-> **Note on `quantity`:** Value is in on-chain nano units (string). To display human-readable value: `Number(quantity) / 10 ** decimals`.
-
----
-
-### `getAvailableTokens(limit?, offset?)`
-
-Returns a page of tokens available for trading (default: first 200).
-
-```ts
-const tokens = await client.getAvailableTokens();
-// [{ address: 'EQ...', symbol: 'WETH', decimals: 18 }, ...]
-```
-
-> **Tip:** Use `findToken(symbol)` for symbol-based lookup — it's more efficient than loading the full list.
-
-**Returns: `AvailableToken[]`**
-
-| Field | Type | Description |
-|---|---|---|
-| `address` | `string` | Jetton address on TON |
-| `symbol` | `string` | Token symbol |
-| `decimals` | `number` | Token decimals |
-
----
-
-### `findToken(symbol)`
-
-Find a single token by its symbol. Preferred way to resolve symbol → address before trading.
-
-```ts
-const weth = await client.findToken('WETH');
-if (!weth) throw new Error('WETH not found');
+~/.tractioneye/
+├── config.json        ← Unified config (credentials, TP/SL, screening)
+└── briefing.json      ← Market candidates + portfolio (written by daemon)
 ```
 
 ---
 
-### `previewTrade(req)`
+## Rate Limits
 
-Simulates a trade and returns expected outcome. **Always call before `executeTrade()`.**
+GeckoTerminal API: 30 requests/minute shared across all components.
 
-```ts
-const preview = await client.previewTrade({
-  action: 'BUY',
-  tokenAddress: 'EQB...', // jetton address
-  amountNano: '5000000000', // 5 TON in nanotons
-});
-```
+| Component | Budget | Usage |
+|-----------|--------|-------|
+| Daemon (TP/SL) | ~6 req/min | Price polling for open positions |
+| Daemon (screening) | ~1.5 req/min | Pool fetching every 3 min |
+| Agent tools | ~22 req/min | `analyze_pool` = 2 req per candidate |
 
-**`TradePreviewRequest`:**
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `action` | `'BUY' \| 'SELL'` | ✅ | Trade direction |
-| `tokenAddress` | `string` | ✅ | Jetton address |
-| `amountNano` | `string` | ✅ | Amount in nano units (TON nanotons for BUY, jetton nano units for SELL) |
-
-**Returns: `TradePreview`**
-
-| Field | Type | Description |
-|---|---|---|
-| `validationOutcome` | `'ok' \| 'warning' \| 'rejected'` | Backend validation result |
-| `lowBalanceState` | `boolean` | True if balance may be insufficient |
-| `estimatedReceiveNano` | `string` | Expected output in nano units |
-| `minReceiveNano` | `string` | Minimum output after slippage |
-| `priceImpactPercent` | `number` | Price impact % |
-| `swapRate` | `string` | Current exchange rate |
+The SDK includes a built-in rate limiter with priority queues (Critical → High → Low).
 
 ---
 
-### `executeTrade(req)`
+## Local Development
 
-Executes a trade. Returns `operationId` for status polling.
-
-```ts
-const execution = await client.executeTrade({
-  action: 'BUY',
-  tokenAddress: 'EQB...',
-  amountNano: '5000000000',
-  slippageTolerance: 0.01, // optional, default 0.01
-});
-
-console.log('Operation ID:', execution.operationId);
-```
-
-**`TradeExecutionRequest`:**
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `action` | `'BUY' \| 'SELL'` | ✅ | — | Trade direction |
-| `tokenAddress` | `string` | ✅ | — | Jetton address |
-| `amountNano` | `string` | ✅ | — | Amount in nano units |
-| `slippageTolerance` | `number` | ❌ | `0.01` | Slippage tolerance (1% = 0.01) |
-
-**Returns: `TradeExecution`**
-
-| Field | Type | Description |
-|---|---|---|
-| `operationId` | `string` | Use this for `getOperationStatus()` |
-| `initialStatus` | `'pending'` | Always `pending` on execution |
-| `swapType` | `TradeAction` | `BUY` or `SELL` |
-| `tokenAddress` | `string` | Token traded |
-| `expectedTokenAmountNano` | `string?` | Expected token output |
-| `expectedTonAmountNano` | `string?` | Expected TON output |
-
-> **Idempotency:** each `executeTrade()` call generates a unique `idempotencyKey` internally. Safe to retry on network errors — backend deduplicates.
-
----
-
-### `getOperationStatus(operationId)`
-
-Polls the status of an executed trade. Poll every 3–5 seconds until status is not `pending`.
-
-```ts
-const status = await client.getOperationStatus(execution.operationId);
-```
-
-**Returns: `OperationStatus`**
-
-| Field | Type | Description |
-|---|---|---|
-| `operationId` | `string` | Operation ID |
-| `status` | `'pending' \| 'confirmed' \| 'adjusted' \| 'failed'` | Current status (see below) |
-| `swapType` | `TradeAction` | `BUY` or `SELL` |
-| `tokenAddress` | `string` | Token address |
-| `actualTokenAmountNano` | `string?` | Actual token amount received |
-| `actualTonAmountNano` | `string?` | Actual TON amount received |
-| `failureReason` | `string?` | Human-readable failure reason |
-
-**Operation status lifecycle:**
-
-```
-pending → confirmed   ✅ trade executed on-chain as expected
-        → adjusted    ⚠️  trade executed but with a different amount
-                          (e.g. slippage hit, partial fill). Check actualTokenAmountNano.
-        → failed      ❌ trade did not execute. Check failureReason.
-                          Common reasons: transaction timeout, insufficient balance, DEX error.
-```
-
-> **On `adjusted`:** The trade went through, but the actual received amount differs from `estimatedReceiveNano`. Always use `actualTokenAmountNano` / `actualTonAmountNano` to record what was actually received.
-
-> **On `failed`:** No funds were moved. It is safe to retry the trade.
-
----
-
-## Example: BUY flow with polling
-
-```ts
-import { TractionEyeClient } from '@tractioneye/agent-sdk';
-
-const client = await TractionEyeClient.create({
-  agentToken: process.env.TRACTIONEYE_AGENT_TOKEN!,
-});
-
-// 1. Find token
-const weth = await client.findToken('WETH');
-if (!weth) throw new Error('WETH not available');
-
-// 2. Amount: 5 TON
-const amountNano = (5n * 10n ** 9n).toString();
-
-// 3. Preview
-const preview = await client.previewTrade({
-  action: 'BUY',
-  tokenAddress: weth.address,
-  amountNano,
-});
-
-if (preview.validationOutcome === 'rejected') {
-  console.log('Trade rejected');
-  process.exit(1);
-}
-
-// 4. Execute
-const execution = await client.executeTrade({
-  action: 'BUY',
-  tokenAddress: weth.address,
-  amountNano,
-});
-
-console.log('Trade started, operationId:', execution.operationId);
-
-// 5. Poll status
-let status;
-do {
-  await new Promise(r => setTimeout(r, 5000));
-  status = await client.getOperationStatus(execution.operationId);
-  console.log('Status:', status.status);
-} while (status.status === 'pending');
-
-if (status.status === 'confirmed') {
-  console.log('Trade confirmed! Received:', status.actualTokenAmountNano, 'nano WETH');
-} else if (status.status === 'adjusted') {
-  console.log('Trade adjusted. Actual received:', status.actualTokenAmountNano);
-} else {
-  console.log('Trade failed:', status.failureReason);
-}
+```bash
+git clone https://github.com/TractionEye/agent-sdk
+cd agent-sdk
+npm install
+npm run build
+npm run check     # TypeScript type checking
 ```
 
 ---
 
-## Tools for LLM agents
+## License
 
-```ts
-import { TractionEyeClient, createTractionEyeTools } from '@tractioneye/agent-sdk';
-
-const client = await TractionEyeClient.create({
-  agentToken: process.env.TRACTIONEYE_AGENT_TOKEN!,
-});
-
-const tools = createTractionEyeTools(client);
-// Pass tools to your agent framework (OpenAI, LangChain, etc.)
-```
-
-Available tools:
-- `tractioneye_get_strategy_summary`
-- `tractioneye_get_portfolio`
-- `tractioneye_get_available_tokens`
-- `tractioneye_preview_trade`
-- `tractioneye_execute_trade`
-- `tractioneye_get_operation_status`
-
----
-
-## Architecture
-
-```
-Agent / LLM
-    │
-    ▼
-TractionEyeClient (SDK)
-    │  - hides HTTP details
-    │  - handles BUY/SELL mapping
-    │  - generates idempotency keys
-    │  - normalizes response contracts
-    │
-    ▼
-TractionEye Backend API
-    │
-    ▼
-Ston.fi (swaps on TON)
-```
-
-Backend is the single source of truth: it validates trades, calculates PnL, and executes swaps. SDK is a thin adapter layer only.
+MIT
