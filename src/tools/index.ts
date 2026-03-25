@@ -26,7 +26,7 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
     {
       name: 'tractioneye_read_briefing',
       description:
-        'Call this FIRST on every trading session tick. Returns market candidates collected from multiple perspectives (volume leaders, trending across timeframes, most active, newly created), current portfolio, and strategy performance. Each candidate has tags showing how it was discovered — a pool appearing in several categories simultaneously may indicate a stronger signal. The briefing also includes top-lists sorted by volume, liquidity, FDV, transaction count, and price gainers (1h, 24h) — use these different views to compare, form hypotheses about what makes a good candidate, and verify your assumptions across sessions.',
+        'Call this FIRST on every trading session tick. Returns market candidates collected from multiple perspectives (volume leaders, trending 5m/1h for catching early growth, most active by transactions, newly created), current portfolio, and strategy performance. Each candidate has tags showing how it was discovered — a pool appearing in several categories simultaneously may indicate a stronger signal. The briefing also includes top-lists sorted by volume, liquidity, FDV, transaction count, and price gainers (1h, 24h) — use these different views to compare, form hypotheses about what makes a good candidate, and verify your assumptions across sessions.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       handler: async () => {
         const briefing = readBriefing();
