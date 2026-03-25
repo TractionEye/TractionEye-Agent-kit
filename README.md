@@ -94,7 +94,14 @@ The background daemon handles market screening and TP/SL monitoring between agen
 
 ```bash
 # Fill in agentToken in ~/.tractioneye/config.json
+
+# If working from a local clone:
 npm run daemon:start    # requires pm2
+
+# If installed as an npm dependency:
+npx tsx node_modules/@tractioneye/agent-sdk/scripts/agent-daemon.ts
+# Or with pm2:
+pm2 start npx --name tractioneye-daemon -- tsx node_modules/@tractioneye/agent-sdk/scripts/agent-daemon.ts
 ```
 
 ---
@@ -338,7 +345,7 @@ The SDK includes a built-in rate limiter with priority queues (Critical → High
 
 ```bash
 git clone https://github.com/TractionEye/TractionEye-Agent-kit
-cd agent-sdk
+cd TractionEye-Agent-kit
 npm install
 npm run build
 npm run check     # TypeScript type checking

@@ -12,22 +12,22 @@
 
 import { writeFileSync, watchFile } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { TractionEyeClient } from '../src/client.js';
-import { RateLimiter } from '../src/rate-limiter.js';
-import { GeckoTerminalClient } from '../src/gecko/client.js';
-import { TokenScreener } from '../src/screening/screener.js';
-import { PositionManager } from '../src/position/manager.js';
-import type { PositionEvent } from '../src/position/types.js';
-import type { PoolInfo } from '../src/gecko/types.js';
-import type { ScreeningFilter } from '../src/screening/types.js';
 import {
+  TractionEyeClient,
+  RateLimiter,
+  GeckoTerminalClient,
+  TokenScreener,
+  PositionManager,
   readConfig,
   briefingPath,
   configPath,
   ensureDataDir,
+  type PositionEvent,
+  type PoolInfo,
+  type ScreeningFilter,
   type DaemonConfig,
   type TpSlConfig,
-} from '../src/config.js';
+} from '../dist/index.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -235,7 +235,7 @@ function notifyAgent(
     timestamp: new Date().toISOString(),
   });
 
-  const message = `Сохрани в дневную память за сегодня событие сделки: ${payload}`;
+  const message = `Save to today's daily memory as a trade event: ${payload}`;
 
   execFile(openclawPath, ['agent', '--session-id', sessionId, '--message', message], (err) => {
     if (err) {
