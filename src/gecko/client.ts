@@ -195,11 +195,21 @@ export class GeckoTerminalClient {
 
   private get<T>(path: string, priority: RequestPriority): Promise<T> {
     return this.limiter.schedule(priority, async () => {
-      const res = await fetch(`${GECKO_BASE}${path}`, {
-        headers: { Accept: 'application/json' },
-      });
-      if (!res.ok) throw new Error(`GeckoTerminal HTTP ${res.status}: ${path}`);
-      return res.json() as Promise<T>;
+      const maxRetries = 3;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const res = await fetch(`${GECKO_BASE}${path}`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (res.status === 429) {
+          const backoffMs = (attempt + 1) * 30_000;
+          console.warn(`[gecko] 429 on ${path}, waiting ${backoffMs / 1000}s (attempt ${attempt + 1}/${maxRetries})`);
+          await new Promise((r) => setTimeout(r, backoffMs));
+          continue;
+        }
+        if (!res.ok) throw new Error(`GeckoTerminal HTTP ${res.status}: ${path}`);
+        return res.json() as Promise<T>;
+      }
+      throw new Error(`GeckoTerminal 429: ${path} (exhausted ${maxRetries} retries)`);
     });
   }
 }

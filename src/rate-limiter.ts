@@ -17,7 +17,7 @@ type QueueEntry<T> = {
 
 /**
  * Token-bucket rate limiter with priority queue and burst protection.
- * GeckoTerminal free tier: 30 requests per 60 seconds.
+ * GeckoTerminal free tier: ~5 req/min sustained (advertised 30, real limit much stricter).
  */
 export class RateLimiter {
   private tokens: number;
@@ -29,7 +29,7 @@ export class RateLimiter {
   private queue: QueueEntry<unknown>[] = [];
   private draining = false;
 
-  constructor(maxTokens = 30, windowMs = 60_000, minIntervalMs = 2_000) {
+  constructor(maxTokens = 5, windowMs = 60_000, minIntervalMs = 12_000) {
     this.maxTokens = maxTokens;
     this.tokens = maxTokens;
     this.windowMs = windowMs;

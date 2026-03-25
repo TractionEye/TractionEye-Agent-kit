@@ -153,8 +153,8 @@ The skill is designed for [OpenClaw](https://openclaw.com) agents but the algori
 The daemon runs as a persistent process (via pm2) and performs two functions:
 
 ### Market screening
-- Fetches TON pools from 7 sources every 3 minutes (configurable): volume leaders, transaction leaders, trending (5m/1h/6h/24h), newly created
-- Tags each pool by how it was discovered (e.g. `top_volume`, `trending_1h`, `new`) — pools found in multiple sources get multiple tags
+- Fetches TON pools from 5 sources every 3 minutes (configurable): volume leaders, transaction leaders, trending (5m/1h), newly created
+- Tags each pool by how it was discovered (e.g. `top_volume`, `trending_5m`, `new`) — pools found in multiple sources get multiple tags
 - Excludes stablecoins (USDT, USDC, etc.) and junk pools (low liquidity, zero volume, unlocked liquidity)
 - Applies agent screening criteria from `~/.tractioneye/config.json`
 - Builds top-lists by volume, liquidity, FDV, transaction count, and price gainers (1h, 24h) via client-side sorting
@@ -281,7 +281,7 @@ Every `PoolInfo` object includes:
 | `uniqueBuyers1h` / `6h` / `24h` | `number` | Unique buyer wallets |
 | `uniqueSellers1h` / `6h` / `24h` | `number` | Unique seller wallets |
 | `buySellRatio` | `number` | Buy/sell ratio |
-| `tags` | `string[]` | How the pool was discovered: `top_volume`, `top_tx_count`, `trending_5m`, `trending_1h`, `trending_6h`, `trending_24h`, `new` |
+| `tags` | `string[]` | How the pool was discovered: `top_volume`, `top_tx_count`, `trending_5m`, `trending_1h`, `new` |
 
 ---
 
@@ -332,13 +332,13 @@ In simulation mode:
 
 ## Rate Limits
 
-GeckoTerminal API: 30 requests/minute shared across all components.
+GeckoTerminal API: ~5 requests/minute sustained (per IP). All components share one budget.
 
 | Component | Budget | Usage |
 |-----------|--------|-------|
-| Daemon (TP/SL) | ~6 req/min | Price polling for open positions |
-| Daemon (screening) | ~2.5 req/min | 7 sources every 3 min |
-| Agent tools | ~21 req/min | `analyze_pool` = 2 req per candidate |
+| Daemon (TP/SL) | ~3 req/min | Batch price polling (1 req per tick, all positions) |
+| Daemon (screening) | ~1.7 req/min | 5 sources every 3 min |
+| Agent tools | on demand | `analyze_pool` = 2 req per candidate, queued via rate limiter |
 
 The Agent Kit includes a built-in rate limiter with priority queues (Critical → High → Low).
 

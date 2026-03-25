@@ -9,7 +9,7 @@ declare enum RequestPriority {
 }
 /**
  * Token-bucket rate limiter with priority queue and burst protection.
- * GeckoTerminal free tier: 30 requests per 60 seconds.
+ * GeckoTerminal free tier: ~5 req/min sustained (advertised 30, real limit much stricter).
  */
 declare class RateLimiter {
     private tokens;

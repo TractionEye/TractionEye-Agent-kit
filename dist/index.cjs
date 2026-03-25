@@ -110,7 +110,7 @@ var RequestPriority = /* @__PURE__ */ ((RequestPriority2) => {
   return RequestPriority2;
 })(RequestPriority || {});
 var RateLimiter = class {
-  constructor(maxTokens = 30, windowMs = 6e4, minIntervalMs = 2e3) {
+  constructor(maxTokens = 5, windowMs = 6e4, minIntervalMs = 12e3) {
     this.lastRequestTime = 0;
     this.queue = [];
     this.draining = false;
@@ -315,11 +315,21 @@ var GeckoTerminalClient = class {
   // ---------- Internal ----------
   get(path, priority) {
     return this.limiter.schedule(priority, async () => {
-      const res = await fetch(`${GECKO_BASE}${path}`, {
-        headers: { Accept: "application/json" }
-      });
-      if (!res.ok) throw new Error(`GeckoTerminal HTTP ${res.status}: ${path}`);
-      return res.json();
+      const maxRetries = 3;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const res = await fetch(`${GECKO_BASE}${path}`, {
+          headers: { Accept: "application/json" }
+        });
+        if (res.status === 429) {
+          const backoffMs = (attempt + 1) * 3e4;
+          console.warn(`[gecko] 429 on ${path}, waiting ${backoffMs / 1e3}s (attempt ${attempt + 1}/${maxRetries})`);
+          await new Promise((r) => setTimeout(r, backoffMs));
+          continue;
+        }
+        if (!res.ok) throw new Error(`GeckoTerminal HTTP ${res.status}: ${path}`);
+        return res.json();
+      }
+      throw new Error(`GeckoTerminal 429: ${path} (exhausted ${maxRetries} retries)`);
     });
   }
 };

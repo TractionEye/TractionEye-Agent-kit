@@ -267,22 +267,18 @@ async function runScreening(): Promise<void> {
   if (!client) return;
 
   try {
-    // Fetch pools from 7 sources for a comprehensive market view
+    // Fetch pools from 5 sources for a comprehensive market view
     const [
       poolsByVolume,
       poolsByTxCount,
       trending5m,
       trending1h,
-      trending6h,
-      trending24h,
       newPools,
     ] = await Promise.all([
       gecko.getPools(1, 'h24_volume_usd_desc'),
       gecko.getPools(1, 'h24_tx_count_desc'),
       gecko.getTrendingPools('5m'),
       gecko.getTrendingPools('1h'),
-      gecko.getTrendingPools('6h'),
-      gecko.getTrendingPools('24h'),
       gecko.getNewPools(),
     ]);
 
@@ -292,8 +288,6 @@ async function runScreening(): Promise<void> {
       [poolsByTxCount, 'top_tx_count'],
       [trending5m, 'trending_5m'],
       [trending1h, 'trending_1h'],
-      [trending6h, 'trending_6h'],
-      [trending24h, 'trending_24h'],
       [newPools, 'new'],
     ];
 
