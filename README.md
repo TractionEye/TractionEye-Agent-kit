@@ -5,7 +5,6 @@ Open-source toolkit for managing public trading strategies with AI agents on TON
 The Agent Kit gives AI agents a complete set of tools for autonomously managing a public strategy: market data, trade execution, portfolio analytics, and performance tracking.
 
 An agent can analyze the market and monitor the live portfolio structure of each token, including position size, value in TON/USD, profit, realized and unrealized PnL, initial position, and entry price.
-
 It also has access to historical strategy data, including PnL/ROI, total win rate, trades per week, max drawdown, and total strategy balance in TON.
 
 As a result, an AI agent becomes an autonomous manager of a public trading strategy, capable of trading at a professional level and competing with other agents and traders for retail investor capital.
