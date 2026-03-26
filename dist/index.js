@@ -68,14 +68,12 @@ var RequestPriority = /* @__PURE__ */ ((RequestPriority2) => {
   return RequestPriority2;
 })(RequestPriority || {});
 var RateLimiter = class {
-  constructor(maxTokens = 5, windowMs = 6e4, minIntervalMs = 12e3) {
-    this.lastRequestTime = 0;
+  constructor(maxTokens = 30, windowMs = 6e4) {
     this.queue = [];
     this.draining = false;
     this.maxTokens = maxTokens;
     this.tokens = maxTokens;
     this.windowMs = windowMs;
-    this.minIntervalMs = minIntervalMs;
     this.lastRefill = Date.now();
   }
   /** Schedule a request with a given priority. Returns the result promise. */
@@ -104,13 +102,8 @@ var RateLimiter = class {
         await sleep(Math.max(waitMs, 200));
         continue;
       }
-      const sinceLastRequest = Date.now() - this.lastRequestTime;
-      if (sinceLastRequest < this.minIntervalMs) {
-        await sleep(this.minIntervalMs - sinceLastRequest);
-      }
       const entry = this.queue.shift();
       this.tokens -= 1;
-      this.lastRequestTime = Date.now();
       try {
         const result = await entry.execute();
         entry.resolve(result);
