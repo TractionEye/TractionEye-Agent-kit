@@ -246,11 +246,12 @@ function notifyAgent(
 
 // ── Screening + Briefing ───────────────────────────────────────────────────
 
-/** Stablecoin name patterns — pools with these in the name are excluded from candidates. */
-const STABLECOIN_PATTERNS = [/\bUSDT\b/i, /\bUSD₮\b/i, /\bUSDC\b/i, /\bDAI\b/i, /\bjUSDT\b/i, /\bjUSDC\b/i];
+/** Stablecoin symbols — pools containing these tokens are excluded from candidates. */
+const STABLECOIN_SYMBOLS = ['usdt', 'usd₮', 'usdc', 'jusdt', 'jusdc', 'dai', 'usdd', 'tusd'];
 
 function isStablecoinPool(name: string): boolean {
-  return STABLECOIN_PATTERNS.some((re) => re.test(name));
+  const lower = name.toLowerCase();
+  return STABLECOIN_SYMBOLS.some((s) => lower.includes(s));
 }
 
 const TOP_LIST_SIZE = 10;
@@ -305,13 +306,27 @@ async function runScreening(): Promise<void> {
     }
 
     // Junk filter + stablecoin exclusion
-    let candidates = [...poolMap.values()].filter((p) => {
+    const filtered = [...poolMap.values()].filter((p) => {
       if (p.reserveInUsd < (JUNK_FILTER.minLiquidityUsd ?? 0)) return false;
       if (p.volume24hUsd <= 0) return false;
       if (p.lockedLiquidityPercent === 0) return false;
       if (isStablecoinPool(p.name)) return false;
       return true;
     });
+
+    // Deduplicate by base token — keep the pool with highest liquidity
+    const byToken = new Map<string, PoolInfo>();
+    for (const p of filtered) {
+      const tokenKey = p.baseTokenId ?? p.name;
+      const existing = byToken.get(tokenKey);
+      if (!existing || p.reserveInUsd > existing.reserveInUsd) {
+        if (existing) p.tags = [...new Set([...p.tags, ...existing.tags])];
+        byToken.set(tokenKey, p);
+      } else {
+        existing.tags = [...new Set([...existing.tags, ...p.tags])];
+      }
+    }
+    let candidates = [...byToken.values()];
 
     // Agent criteria filter from config
     const agentFilter = config.screening?.filter as ScreeningFilter | undefined;
