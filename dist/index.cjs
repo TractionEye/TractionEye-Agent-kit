@@ -1059,21 +1059,13 @@ function createTractionEyeTools(client) {
       },
       handler: async (args) => {
         const poolAddress = args["poolAddress"];
-        const requestedTimeframe = args["ohlcvTimeframe"] ?? "hour";
+        const timeframe = args["ohlcvTimeframe"] ?? "hour";
         const limit = args["ohlcvLimit"] ?? 30;
         const minVol = args["minTradeVolumeUsd"];
-        const trades = await client.gecko.getPoolTrades(
-          poolAddress,
-          minVol != null ? { tradeVolumeInUsdGreaterThan: minVol } : void 0
-        );
-        await new Promise((r) => setTimeout(r, 3e3));
-        let ohlcv = await client.gecko.getPoolOhlcv(poolAddress, requestedTimeframe, limit);
-        let usedTimeframe = requestedTimeframe;
-        if (ohlcv.candles.length === 0 && requestedTimeframe !== "minute") {
-          await new Promise((r) => setTimeout(r, 3e3));
-          ohlcv = await client.gecko.getPoolOhlcv(poolAddress, "minute", limit);
-          usedTimeframe = "minute";
-        }
+        const [trades, ohlcv] = await Promise.all([
+          client.gecko.getPoolTrades(poolAddress, minVol != null ? { tradeVolumeInUsdGreaterThan: minVol } : void 0),
+          client.gecko.getPoolOhlcv(poolAddress, timeframe, limit)
+        ]);
         const walletVolume = /* @__PURE__ */ new Map();
         for (const t of trades) {
           walletVolume.set(t.txFromAddress, (walletVolume.get(t.txFromAddress) ?? 0) + t.volumeInUsd);
@@ -1086,7 +1078,7 @@ function createTractionEyeTools(client) {
         }));
         return {
           trades: { count: trades.length, items: trades.slice(0, 50) },
-          ohlcv: { timeframe: usedTimeframe, candles: ohlcv.candles, meta: ohlcv.meta },
+          ohlcv: { timeframe, candles: ohlcv.candles, meta: ohlcv.meta },
           walletConcentration: { topWallets, totalTradeVolumeUsd: totalVolume }
         };
       }
