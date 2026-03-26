@@ -32,7 +32,7 @@ import {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const DEFAULT_SCREENING_INTERVAL_MS = 180_000; // 3 minutes
-const TP_SL_POLL_INTERVAL_MS = 10_000; // 10 seconds
+const TP_SL_POLL_INTERVAL_MS = 30_000; // 30 seconds
 
 /** Hardcoded junk filter — pools that don't pass are discarded before agent criteria. */
 const JUNK_FILTER: ScreeningFilter = {
