@@ -332,15 +332,15 @@ In simulation mode:
 
 ## Rate Limits
 
-GeckoTerminal API: ~5 requests/minute sustained (per IP). All components share one budget.
+GeckoTerminal API: ~30 req/min advertised, ~5-6 burst limit in practice (per IP). Daemon and agent run as separate processes but share one IP budget.
 
 | Component | Budget | Usage |
 |-----------|--------|-------|
-| Daemon (TP/SL) | ~3 req/min | Batch price polling (1 req per tick, all positions) |
-| Daemon (screening) | ~1.7 req/min | 5 sources every 3 min |
+| Daemon (TP/SL) | ~2 req/min | Batch price polling (1 req per tick, all positions) |
+| Daemon (screening) | ~1.7 req/min | 5 sources every 3 min (~10s with rate limiting) |
 | Agent tools | on demand | `analyze_pool` = 2 req per candidate, queued via rate limiter |
 
-The Agent Kit includes a built-in rate limiter with priority queues (Critical → High → Low).
+The Agent Kit includes a built-in rate limiter with priority queues (Critical → High → Low), a burst bucket of 5 requests, and a minimum interval of 2 seconds between requests. On 429 errors, the client retries up to 3 times with 5-second incremental backoff.
 
 ---
 
