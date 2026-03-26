@@ -18,20 +18,24 @@ type QueueEntry<T> = {
 /**
  * Token-bucket rate limiter with priority queue.
  * GeckoTerminal free tier: ~30 req/min advertised, ~5-6 burst limit in practice.
- * Strategy: allow bursts (finish fast, free the channel), rely on retry for edge cases.
+ * Strategy: small burst bucket (5) + minimum interval between requests (2s)
+ * to stay within real-world limits across daemon + agent processes sharing one IP.
  */
 export class RateLimiter {
   private tokens: number;
   private readonly maxTokens: number;
   private readonly windowMs: number;
+  private readonly minIntervalMs: number;
   private lastRefill: number;
+  private lastRequest: number = 0;
   private queue: QueueEntry<unknown>[] = [];
   private draining = false;
 
-  constructor(maxTokens = 30, windowMs = 60_000) {
+  constructor(maxTokens = 5, windowMs = 60_000, minIntervalMs = 2_000) {
     this.maxTokens = maxTokens;
     this.tokens = maxTokens;
     this.windowMs = windowMs;
+    this.minIntervalMs = minIntervalMs;
     this.lastRefill = Date.now();
   }
 
@@ -68,8 +72,15 @@ export class RateLimiter {
         continue;
       }
 
+      // Enforce minimum interval between requests
+      const sinceLast = Date.now() - this.lastRequest;
+      if (sinceLast < this.minIntervalMs) {
+        await sleep(this.minIntervalMs - sinceLast);
+      }
+
       const entry = this.queue.shift()!;
       this.tokens -= 1;
+      this.lastRequest = Date.now();
 
       try {
         const result = await entry.execute();

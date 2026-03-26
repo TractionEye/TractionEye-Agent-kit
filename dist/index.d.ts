@@ -10,16 +10,19 @@ declare enum RequestPriority {
 /**
  * Token-bucket rate limiter with priority queue.
  * GeckoTerminal free tier: ~30 req/min advertised, ~5-6 burst limit in practice.
- * Strategy: allow bursts (finish fast, free the channel), rely on retry for edge cases.
+ * Strategy: small burst bucket (5) + minimum interval between requests (2s)
+ * to stay within real-world limits across daemon + agent processes sharing one IP.
  */
 declare class RateLimiter {
     private tokens;
     private readonly maxTokens;
     private readonly windowMs;
+    private readonly minIntervalMs;
     private lastRefill;
+    private lastRequest;
     private queue;
     private draining;
-    constructor(maxTokens?: number, windowMs?: number);
+    constructor(maxTokens?: number, windowMs?: number, minIntervalMs?: number);
     /** Schedule a request with a given priority. Returns the result promise. */
     schedule<T>(priority: RequestPriority, execute: () => Promise<T>): Promise<T>;
     private refill;

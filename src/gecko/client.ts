@@ -201,7 +201,7 @@ export class GeckoTerminalClient {
           headers: { Accept: 'application/json' },
         });
         if (res.status === 429) {
-          const backoffMs = (attempt + 1) * 30_000;
+          const backoffMs = (attempt + 1) * 5_000;
           console.warn(`[gecko] 429 on ${path}, waiting ${backoffMs / 1000}s (attempt ${attempt + 1}/${maxRetries})`);
           await new Promise((r) => setTimeout(r, backoffMs));
           continue;

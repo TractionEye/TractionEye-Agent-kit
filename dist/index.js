@@ -68,12 +68,14 @@ var RequestPriority = /* @__PURE__ */ ((RequestPriority2) => {
   return RequestPriority2;
 })(RequestPriority || {});
 var RateLimiter = class {
-  constructor(maxTokens = 30, windowMs = 6e4) {
+  constructor(maxTokens = 5, windowMs = 6e4, minIntervalMs = 2e3) {
+    this.lastRequest = 0;
     this.queue = [];
     this.draining = false;
     this.maxTokens = maxTokens;
     this.tokens = maxTokens;
     this.windowMs = windowMs;
+    this.minIntervalMs = minIntervalMs;
     this.lastRefill = Date.now();
   }
   /** Schedule a request with a given priority. Returns the result promise. */
@@ -102,8 +104,13 @@ var RateLimiter = class {
         await sleep(Math.max(waitMs, 200));
         continue;
       }
+      const sinceLast = Date.now() - this.lastRequest;
+      if (sinceLast < this.minIntervalMs) {
+        await sleep(this.minIntervalMs - sinceLast);
+      }
       const entry = this.queue.shift();
       this.tokens -= 1;
+      this.lastRequest = Date.now();
       try {
         const result = await entry.execute();
         entry.resolve(result);
@@ -272,7 +279,7 @@ var GeckoTerminalClient = class {
           headers: { Accept: "application/json" }
         });
         if (res.status === 429) {
-          const backoffMs = (attempt + 1) * 3e4;
+          const backoffMs = (attempt + 1) * 5e3;
           console.warn(`[gecko] 429 on ${path}, waiting ${backoffMs / 1e3}s (attempt ${attempt + 1}/${maxRetries})`);
           await new Promise((r) => setTimeout(r, backoffMs));
           continue;
@@ -1024,7 +1031,6 @@ function createTractionEyeTools(client) {
           poolAddress,
           minVol != null ? { tradeVolumeInUsdGreaterThan: minVol } : void 0
         );
-        await new Promise((r) => setTimeout(r, 3e3));
         const ohlcv = await client.gecko.getPoolOhlcv(poolAddress, timeframe, limit);
         const walletVolume = /* @__PURE__ */ new Map();
         for (const t of trades) {
