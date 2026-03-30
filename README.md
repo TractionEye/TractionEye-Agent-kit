@@ -1,62 +1,76 @@
 # @tractioneye/agent-kit
 
-Open-source toolkit for managing public trading strategies with AI agents on TON trading strategy marketplace.
+**Open-source AI agent toolkit for autonomous trading on TON DEX.**
 
-The Agent Kit gives AI agents a complete set of tools for autonomously managing a public strategy: market data, trade execution, portfolio analytics, and performance tracking.
+The Agent Kit gives AI agents everything needed to manage a public trading strategy: market discovery, safety verification, trade execution with atomic position protection, and self-improving performance tracking.
 
-An agent can analyze the market and monitor the live portfolio structure of each token, including position size, value in TON/USD, profit, realized and unrealized PnL, initial position, and entry price.
-It also has access to historical strategy data, including PnL/ROI, total win rate, trades per week, max drawdown, and total strategy balance in TON.
+An agent becomes an autonomous strategy manager — analyzing markets, verifying candidates through a safety pipeline, executing trades with triple barrier protection, and reflecting on results to improve over time.
 
-As a result, an AI agent becomes an autonomous manager of a public trading strategy, capable of trading at a professional level and competing with other agents and traders for retail investor capital.
+---
 
-## What's inside
+## Key Features
 
-| Component | Description |
-|-----------|-------------|
-| **SDK client** | High-level interface to TractionEye strategy API — portfolio, trades, status |
-| **12 agent tools** | Ready-to-use tool definitions for LLM agents (OpenClaw, LangChain, OpenAI, etc.) |
-| **GeckoTerminal integration** | Real-time market data — pools, prices, OHLCV candles, trade history |
-| **Token screener** | Filter TON pools by liquidity, volume, FDV, price change, unique buyers, and more |
-| **Position manager** | Automated TP/SL monitoring with price polling |
-| **Background daemon** | Continuous market scanning + TP/SL execution between agent sessions |
-| **Trading skill** | Self-learning trading behavior definition with session algorithm |
+| Feature | Description |
+|---------|-------------|
+| **17 agent tools** | Ready-to-use tool definitions for LLM agents (OpenClaw, LangChain, OpenAI, etc.) |
+| **Safety gates** | 10 hard rejects (honeypot, mint/freeze authority, wash trading) + 7 structural penalties. LLM cannot bypass. |
+| **Triple barrier** | Position protection: stop loss + take profit + trailing stop + time limit. Set atomically with buy. |
+| **Anti-wash detection** | 5 organicity signals detect fake volume before buying |
+| **Verify pipeline** | 4-call GeckoTerminal verification: safety, buyers, trades, price structure |
+| **Background daemon** | 4 microcycles running 24/7: price sentry, scout, thesis checks |
+| **Dual API** | DexScreener (discovery, prices) + GeckoTerminal (verification, safety) with batched requests |
+| **State persistence** | 6 state artifacts with atomic writes for crash safety |
+| **Cooldown system** | Prevents re-buying tokens after stop loss (breaks loss cycles) |
+| **Eval metrics** | Close type histogram, archetype stats, profit factor with 7-day sliding window |
 | **Simulation mode** | Dry-run trading for strategy testing before going live |
 
-## How it works
+---
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│  AI Agent (OpenClaw / LangChain / custom)   │
-│  Uses 12 tools + trading skill              │
-└──────────────────┬──────────────────────────┘
-                   │
-         ┌─────────▼──────────┐
-         │    Agent Kit       │
-         │  TractionEyeClient │
-         └──┬─────────────┬───┘
-            │             │
-   ┌────────▼───┐   ┌────▼────────────┐
-   │ TractionEye│   │  GeckoTerminal  │
-   │ Backend API│   │  API (market    │
-   │ (trades,   │   │  data, pools,   │
-   │  portfolio)│   │  OHLCV, trades) │
-   └────────┬───┘   └────────────────┘
-            │
-   ┌────────▼───┐
-   │  Ston.fi   │
-   │  (swaps)   │
-   └────────────┘
+                    ┌─────────────────────────────────────────────┐
+                    │     AI Agent (OpenClaw / LangChain / ...)   │
+                    │     Uses 17 tools + trading skill           │
+                    └──────────────────┬──────────────────────────┘
+                                       │
+                              ┌────────▼─────────┐
+                              │    Agent Kit     │
+                              │ TractionEyeClient│
+                              └──┬───────┬────┬──┘
+                                 │       │    │
+                  ┌──────────────▼──┐ ┌──▼────▼──────────────┐
+                  │  DexScreener    │ │  GeckoTerminal       │
+                  │  (discovery,    │ │  (verify, safety,    │
+                  │   prices,       │ │   OHLCV, trades,     │
+                  │   screening)    │ │   unique buyers)     │
+                  └─────────────────┘ └──────────────────────┘
+                                 │
+                       ┌─────────▼──────────┐
+                       │  TractionEye       │
+                       │  Backend API       │
+                       │  (execute trades,  │
+                       │   portfolio, PnL)  │
+                       └────────────────────┘
 
-┌──────────────────────────────────────┐
-│  Background Daemon (pm2)             │
-│  • TP/SL monitoring 24/7             │
-│  • Market screening every 3 min     │
-│  • Writes briefing.json for agent   │
-│  • Auto-sells on TP/SL trigger      │
-└──────────────────────────────────────┘
+   ┌────────────────────────────────────────────────────────────┐
+   │  Background Daemon (pm2)                                   │
+   │                                                            │
+   │  Price Sentry (30s)  — batch prices, triple barrier eval  │
+   │  Scout (3min)        — discovery, junk filter, shortlist  │
+   │  Thesis Light (60s)  — DexScreener momentum check         │
+   │  Thesis Deep (10min) — GeckoTerminal buyer diversity      │
+   │  Heartbeat (15min)   — triggers agent deep-think session  │
+   │                                                            │
+   │  Writes: market_state.json, briefing.json                 │
+   │  Monitors: all positions via BarrierManager               │
+   │  Protects: auto-sells on SL/TP/trailing/time barrier      │
+   └────────────────────────────────────────────────────────────┘
 ```
 
 > **The Agent Kit does not manage wallets or private keys.** All trade execution happens server-side on TractionEye infrastructure.
+
+---
 
 ## Install
 
@@ -64,16 +78,18 @@ As a result, an AI agent becomes an autonomous manager of a public trading strat
 npm install github:TractionEye/TractionEye-Agent-kit
 ```
 
-## Quick start
+---
+
+## Quick Start
 
 ### 1. Get your Agent Token
 
 1. Open [TractionEye](https://t.me/TractionEyeTestBot/app) in Telegram
-2. Go to your strategy → **Edit Strategy**
+2. Go to your strategy -> **Edit Strategy**
 3. Tap **Generate Token**
-4. Copy the token — it will only be shown once
+4. Copy the token (shown only once)
 
-> **One token = one strategy.** To get a fresh token, tap **Regenerate** — the old token is immediately revoked.
+> **One token = one strategy.** Tap **Regenerate** for a new token — the old one is revoked immediately.
 
 ### 2. Initialize the client
 
@@ -84,96 +100,160 @@ const client = await TractionEyeClient.create({
   agentToken: 'your-agent-token',
 });
 
-// For AI agents — get all 12 tools
+// Get all 17 tools for your AI agent
 const tools = createTractionEyeTools(client);
 ```
 
 ### 3. Start the daemon
 
-The background daemon handles market screening and TP/SL monitoring between agent sessions.
-
 ```bash
-# Fill in agentToken in ~/.tractioneye/config.json
+# Set agentToken in ~/.tractioneye/config.json, then:
 
-# If working from a local clone:
+# Foreground (for debugging):
+npm run daemon
+
+# Background (production):
 npm run daemon:start    # requires pm2
 
-# If installed as an npm dependency:
-npx tsx node_modules/@tractioneye/agent-sdk/scripts/agent-daemon.ts
-# Or with pm2:
-pm2 start npx --name tractioneye-daemon -- tsx node_modules/@tractioneye/agent-sdk/scripts/agent-daemon.ts
+# Status / stop:
+npm run daemon:status
+npm run daemon:stop
+```
+
+### 4. First trading session
+
+```
+read_briefing           → market state, shortlist, regime, cooldowns
+  ↓
+verify_candidate        → safety + organicity + momentum + confidence
+  ↓
+buy_token (+ barriers)  → cooldown check → safety gate → execute → barriers registered
+  ↓
+record_reflection       → append to reflection log
+  ↓
+get_status              → PnL, win rate, portfolio review
 ```
 
 ---
 
 ## Agent Tools
 
-`createTractionEyeTools(client)` returns 12 tools designed for LLM agents. Each tool has a description that tells the agent when and how to use it.
+`createTractionEyeTools(client)` returns **17 tools**. Each tool has a description that tells the agent when and how to use it.
 
-### Trading session flow
-
-```
-read_briefing → analyze_pool → buy_token → set_tp_sl → get_status
-```
-
-### Tool reference
+### Core tools
 
 | Tool | Description |
 |------|-------------|
-| `read_briefing` | Get market candidates from multiple perspectives (volume, trending, activity, new), tagged by source, with top-lists by key metrics. **Call first** on every trading session. |
-| `analyze_pool` | Deep-analyze a pool: OHLCV candles, trade history, whale wallet concentration. Call after briefing, before buying. |
-| `buy_token` | Buy a token. Handles resolve → preview → validate → execute → poll internally. |
-| `sell_token` | Sell a token (full or partial). Use `"all"` for amountNano to sell entire position. |
-| `set_tp_sl` | Set Take Profit / Stop Loss. The daemon monitors prices 24/7 and auto-sells when triggered. |
-| `update_screening_config` | Update screening criteria for the daemon's candidate selection. |
-| `get_status` | Get strategy performance (PnL, win rate, drawdown) and portfolio in one call. |
-| `screen_tokens` | Screen TON pools by criteria (liquidity, FDV, volume, price change, etc.). For ad-hoc use. |
-| `find` | Find a token by symbol or search pools by keyword. |
-| `get_token_price` | Get current USD price for a token. |
-| `get_available_tokens` | List tokens available for trading in this strategy. |
-| `get_simulation_results` | Get dry-run simulation results. Only available in simulation mode. |
+| `read_briefing` | Market state: shortlisted candidates with computed signals, archetypes, cooldowns, market regime, API usage. **Call first** on every session. |
+| `verify_candidate` | Full 4-call verification: token safety (honeypot/mint/freeze), pool health (unique buyers), trade flow (wash detection), OHLCV. Returns safety verdict, organicity, confidence score. Uses 2-4 GeckoTerminal calls. |
+| `buy_token` | Atomic buy: cooldown check -> safety gate -> penalty preview -> execute -> barrier registration. No gap between buy and protection. Accepts custom `barriers` and `archetype`. |
+| `sell_token` | Sell token (full or partial). Use `"all"` for amountNano to exit entire position. |
+| `set_tp_sl` | Modify barriers on open positions: TP, SL, trailing stop (activation + delta), time limit, partial TP. Not needed at buy time (barriers set atomically). |
+| `review_position` | Check thesis for an open position: fresh market data, organicity, signals. Use to decide hold/exit. |
+| `get_status` | Strategy PnL, win rate, drawdown, balance, current positions. |
+| `record_reflection` | Write to reflection log: trade_closed, session_summary, lesson_learned. Append-only JSONL. |
+
+### Discovery & screening
+
+| Tool | Description |
+|------|-------------|
+| `screen_tokens` | Ad-hoc screening by criteria (liquidity, volume, FDV, price change, buy/sell ratio, etc.). |
+| `find` | Find token by symbol or search pools by keyword. |
+| `get_token_price` | Current USD price for a token. |
+| `get_available_tokens` | List of tokens available for trading in this strategy. |
+| `update_screening_config` | Update daemon screening criteria. |
+
+### Policy & budget
+
+| Tool | Description |
+|------|-------------|
+| `read_risk_policy` | Current risk caps: max positions, exposure limit, cooldown duration, default barriers. Read-only. |
+| `read_api_budget` | Current API quota state (GeckoTerminal and DexScreener usage vs limits). |
+| `get_simulation_results` | Dry-run results: win rate, avg PnL, recommended parameters. Simulation mode only. |
+
+### Deprecated
+
+| Tool | Description |
+|------|-------------|
+| `analyze_pool` | Replaced by `verify_candidate`. Still works as legacy fallback (trades + OHLCV only, no safety checks). |
 
 ---
 
-## Trading Skill
+## Safety Gates
 
-The kit includes a trading skill file at `skills/trading.md` that defines agent behavior:
+The safety gate is deterministic code that runs **before** every trade. The LLM cannot bypass, override, or disable it.
 
-- **Session algorithm** — step-by-step: recall memory → briefing → deep analysis → buy → set TP/SL → save to memory → reflect
-- **Self-learning** — agent researches trading approaches, tests them, records verified lessons back into the skill
-- **Daily memory** — agent maintains continuity between cron sessions through structured memory
-- **Cron integration** — the skill specifies the cron message that triggers the session algorithm
+### Hard rejects (trade is impossible)
 
-The skill is designed for [OpenClaw](https://openclaw.com) agents but the algorithm can be adapted for any agent framework.
+| Check | Condition |
+|-------|-----------|
+| Honeypot | Token confirmed as honeypot (cannot sell) |
+| Mint authority | Owner can mint tokens, devaluing position |
+| Freeze authority | Owner can freeze tokens, blocking funds |
+| Duplicate position | Token already in portfolio |
+| Position cap | Open positions >= max allowed |
+| Not tradeable | Token not available on TractionEye |
+| Zero liquidity | Pool liquidity < $500 |
+| Wash confirmed | Anti-wash check found fake volume (3+ signals failed) |
+| Cooldown | Token exited by stop loss / thesis break within cooldown period |
+
+### Structural penalties (trade allowed, size reduced)
+
+Penalties stack multiplicatively. Example: concentrated holders (x0.5) + few holders (x0.7) + CTO (x0.8) = position size x0.28.
+
+| Check | Multiplier |
+|-------|-----------|
+| Top 10 holders > threshold | x0.5 |
+| Holder count < minimum | x0.7 |
+| Low locked liquidity | x0.6 |
+| Pool age < 30 minutes | x0.5 |
+| Community takeover token | x0.8 |
+| Honeypot status unknown | x0.9 |
+| Suspicious organicity | x0.5 |
+
+---
+
+## Triple Barrier System
+
+Every position is protected by 4 barriers evaluated every 30 seconds. Whichever fires first closes the position.
+
+| Barrier | How it works |
+|---------|-------------|
+| **Stop Loss** | Exit if PnL drops to -X% |
+| **Take Profit** | Exit if PnL reaches +X% |
+| **Trailing Stop** | Activates at +X%, then follows Y% below peak PnL. Captures extended runs. |
+| **Time Limit** | Exit if position held longer than N seconds. Frees capital from stagnant positions. |
+| **Partial TP** | Sell Z% of position at +X% (optional, fires once) |
+
+Barriers are set **atomically** with the buy — no gap between purchase and protection. The daemon enforces them 24/7 regardless of agent availability.
+
+Default barriers per archetype:
+
+| Archetype | TP | SL | Trailing | Time limit |
+|-----------|----|----|----------|------------|
+| organic_breakout | +30% | -10% | 15% activate, 5% delta | 2 hours |
+| paid_attention | +15% | -8% | 10% activate, 4% delta | 1 hour |
+| cto_momentum | +20% | -12% | 12% activate, 5% delta | 1.5 hours |
 
 ---
 
 ## Background Daemon
 
-The daemon runs as a persistent process (via pm2) and performs two functions:
+The daemon is a stateful runtime with 4 microcycles:
 
-### Market screening
-- Fetches TON pools from 5 sources every 3 minutes (configurable): volume leaders, transaction leaders, trending (5m/1h), newly created
-- Tags each pool by how it was discovered (e.g. `top_volume`, `trending_5m`, `new`) — pools found in multiple sources get multiple tags
-- Excludes stablecoins (USDT, USDC, etc.) and junk pools (low liquidity, zero volume, unlocked liquidity)
-- Applies agent screening criteria from `~/.tractioneye/config.json`
-- Builds top-lists by volume, liquidity, FDV, transaction count, and price gainers (1h, 24h) via client-side sorting
-- Writes `~/.tractioneye/briefing.json` with tagged candidates + top-lists + portfolio + strategy state
-- **Automatically pauses screening while an agent session is active** (lock file expires after 5 minutes of inactivity) — gives the agent full GeckoTerminal API budget during trading sessions
+| Cycle | Interval | What it does | API calls |
+|-------|----------|-------------|-----------|
+| **Price Sentry** | 30s | Batch price check for all positions, evaluate triple barriers | 1 DexScreener (batch) |
+| **Scout** | 3min | Pool discovery, junk filter, archetype classification, market state update | 3-7 DexScreener |
+| **Thesis Light** | 60s | Momentum check using DexScreener data (price/volume trends) | 0 GeckoTerminal |
+| **Thesis Deep** | 10min | Buyer diversity + safety re-check via GeckoTerminal | 2 GeckoTerminal / position |
 
-### TP/SL monitoring
-- Polls token prices continuously
-- Auto-sells when Take Profit or Stop Loss triggers
-- Notifies the agent via OpenClaw CLI with full trade details (token, prices, PnL, operationId)
-
-### Daemon commands
-
-```bash
-npm run daemon           # run in foreground
-npm run daemon:start     # start via pm2
-npm run daemon:stop      # stop
-npm run daemon:status    # check status
-```
+The daemon also:
+- Records cooldowns when positions exit by stop loss or thesis break
+- Updates playbook stats on every trade close
+- Detects market regime (active / quiet / volatile)
+- Emits events: `shortlist_ready`, `thesis_break`, `barrier_triggered`
+- Notifies the agent via OpenClaw CLI on barrier triggers
 
 ---
 
@@ -190,14 +270,26 @@ All configuration lives in `~/.tractioneye/config.json`:
     "defaults": {
       "takeProfitPercent": 25,
       "stopLossPercent": 8
-    },
-    "perToken": {}
+    }
   },
   "screening": {
     "intervalMs": 180000,
     "filter": {
       "minLiquidityUsd": 1000,
       "minVolume24hUsd": 500
+    }
+  },
+  "riskPolicy": {
+    "maxOpenPositions": 5,
+    "maxTotalExposurePercent": 80,
+    "maxPerTokenPercent": 15,
+    "maxPriceImpactPercent": 5,
+    "cooldownAfterExitMinutes": 120,
+    "defaultBarriers": {
+      "stopLossPercent": 10,
+      "takeProfitPercent": 25,
+      "timeLimitSeconds": 7200,
+      "trailingStop": { "activationPercent": 15, "deltaPercent": 5 }
     }
   }
 }
@@ -206,101 +298,59 @@ All configuration lives in `~/.tractioneye/config.json`:
 | Key | Description |
 |-----|-------------|
 | `agentToken` | Agent token from TractionEye strategy |
-| `sessionId` | OpenClaw session ID for daemon → agent notifications |
-| `openclawPath` | Path to OpenClaw CLI binary |
-| `tpSl.defaults` | Default TP/SL thresholds for all positions |
-| `tpSl.perToken` | Per-token TP/SL overrides |
-| `screening.intervalMs` | Market scan interval in milliseconds |
+| `sessionId` | OpenClaw session ID for daemon notifications |
+| `tpSl.defaults` | Legacy TP/SL thresholds (used alongside barriers) |
 | `screening.filter` | Screening criteria (same fields as `screen_tokens` tool) |
-
-The config is created automatically on `npm install` with sensible defaults.
-
----
-
-## Client Methods
-
-The client exposes these methods directly. Agent tools use them internally, but they are also available for custom integrations.
-
-### Strategy & Portfolio
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `getStrategySummary()` | `StrategySummary` | PnL, win rate, balance, drawdown |
-| `getPortfolio()` | `PortfolioSummary` | Current positions with PnL |
-| `getAvailableTokens()` | `AvailableToken[]` | Tokens available for trading |
-| `findToken(symbol)` | `AvailableToken \| null` | Resolve symbol → address |
-
-### Trading
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `previewTrade(req)` | `TradePreview` | Simulate trade, get price impact and validation |
-| `executeTrade(req)` | `TradeExecution` | Execute trade, returns operationId |
-| `getOperationStatus(id)` | `OperationStatus` | Poll trade status until final |
-
-### Market Data (GeckoTerminal)
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `gecko.getTrendingPools(duration?)` | `PoolInfo[]` | Trending pools on TON (duration: `5m`, `1h`, `6h`, `24h`) |
-| `gecko.getNewPools()` | `PoolInfo[]` | Newly created pools |
-| `gecko.getPools(page?, sort?)` | `PoolInfo[]` | Pool listing (sort: `h24_volume_usd_desc`, `h24_tx_count_desc`) |
-| `gecko.getPoolTrades(addr)` | `TradeInfo[]` | Recent trades for a pool |
-| `gecko.getPoolOhlcv(addr, tf)` | `OhlcvResponse` | OHLCV candles (day/hour/minute) |
-| `gecko.getTokenPrice(addr)` | `TokenPrice` | Current token price |
-| `gecko.searchPools(query)` | `PoolInfo[]` | Search pools by keyword |
-
-### Screening & Position Management
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `screenTokens(config)` | `PoolInfo[]` | Screen pools by filter criteria |
-| `searchPools(query)` | `PoolInfo[]` | Search + filter pools |
-| `startPositionMonitor(...)` | `void` | Start TP/SL monitoring loop |
-| `stopPositionMonitor()` | `void` | Stop TP/SL monitoring |
-| `getSimulationResults()` | `SimulationResult \| null` | Dry-run results (simulation mode only) |
+| `riskPolicy` | Hard limits the agent cannot override |
 
 ---
 
-## Enriched Pool Data
+## State Files
 
-Every `PoolInfo` object includes:
+```
+~/.tractioneye/
+├── config.json                  ← Credentials, TP/SL, screening, risk policy
+├── briefing.json                ← Legacy briefing (backward compatible)
+├── agent-session.lock           ← Session lock (agent active indicator)
+└── state/
+    ├── market_state.json        ← Market shortlist, regime, signals, cooldowns
+    ├── candidate_registry.json  ← Candidate lifecycle (discovered → verified → bought)
+    ├── portfolio_state.json     ← Position thesis, barriers, exit events
+    ├── playbooks.json           ← Archetype definitions + per-archetype stats
+    ├── cooldown.json            ← Tokens in cooldown after stop loss
+    ├── eval_report.json         ← Performance metrics with baseline comparison
+    └── reflection_log.jsonl     ← Append-only agent reflections and lessons
+```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `poolAddress` | `string` | Pool contract address |
-| `name` | `string` | Pool name |
-| `baseTokenPriceUsd` | `string` | Base token price in USD |
-| `reserveInUsd` | `number` | Total pool liquidity (USD) |
-| `fdvUsd` | `number \| null` | Fully diluted valuation |
-| `marketCapUsd` | `number \| null` | Market capitalization |
-| `lockedLiquidityPercent` | `number \| null` | Locked liquidity percentage |
-| `volume24hUsd` / `6h` / `1h` | `number` | Trading volume |
-| `priceChange5m` / `15m` / `30m` / `1h` / `6h` / `24h` | `number` | Price change (%) |
-| `transactions24h` | `number` | Total transactions in 24h |
-| `buys24h` / `sells24h` | `number` | Buy and sell counts |
-| `uniqueBuyers1h` / `6h` / `24h` | `number` | Unique buyer wallets |
-| `uniqueSellers1h` / `6h` / `24h` | `number` | Unique seller wallets |
-| `buySellRatio` | `number` | Buy/sell ratio |
-| `tags` | `string[]` | How the pool was discovered: `top_volume`, `top_tx_count`, `trending_5m`, `trending_1h`, `new` |
+All JSON state files use **atomic writes** (write to .tmp, then rename) for crash safety.
 
 ---
 
-## Screening Filters
+## Rate Limits
 
-Used by `screen_tokens` tool and `update_screening_config`:
+The kit manages two external APIs with built-in rate limiting and priority queues:
 
-| Filter | Type | Description |
-|--------|------|-------------|
-| `minLiquidityUsd` / `maxLiquidityUsd` | `number` | Pool liquidity range |
-| `minFdvUsd` / `maxFdvUsd` | `number` | FDV range |
-| `minMarketCapUsd` / `maxMarketCapUsd` | `number` | Market cap range |
-| `minLockedLiquidityPercent` | `number` | Minimum locked liquidity |
-| `minVolume24hUsd` | `number` | Minimum 24h volume |
-| `priceChange5m` / `15m` / `30m` / `1h` / `6h` / `24h` | `{min?, max?}` | Price change range (%) |
-| `minTransactions24h` | `number` | Minimum transactions |
-| `minBuySellRatio` | `number` | Minimum buy/sell ratio |
-| `minUniqueBuyers24h` | `number` | Minimum unique buyers |
+| API | Current limit | Usage |
+|-----|--------------|-------|
+| **DexScreener** | 10 req/60s | Discovery, prices (batch up to 30 tokens/request), screening |
+| **GeckoTerminal** | 5 req/60s | Verification (4 calls), thesis deep check (2 calls/position) |
+| **TractionEye backend** | No limit | Trade execution, portfolio, strategy |
+
+The quota manager tracks per-queue budgets (critical / verify / scout / background) and includes 429 detection with automatic feedback.
+
+---
+
+## Trading Skill
+
+The kit includes `skills/trading.md` — a behavioral specification for AI trading agents:
+
+- **v2 session algorithm**: briefing -> verify candidates -> atomic buy with barriers -> reflection
+- **Archetype-aware trading**: different barrier configs for organic_breakout / paid_attention / cto_momentum
+- **Self-learning**: agent records lessons, tracks which archetypes and signals produce best results
+- **Position review**: handles weakening/broken thesis from daemon monitoring
+- **Reflection system**: structured entries (trade_closed, session_summary, lesson_learned) persisted to JSONL
+
+Designed for [OpenClaw](https://openclaw.com) agents. The algorithm can be adapted for any LLM agent framework.
 
 ---
 
@@ -314,35 +364,31 @@ const client = await TractionEyeClient.create({
 ```
 
 In simulation mode:
-- `executeTrade()` records virtual trades instead of real ones
-- Portfolio reads come from the real backend (positions are not simulated)
+- `executeTrade()` records virtual trades instead of real execution
 - `getSimulationResults()` returns win rate, average PnL, and recommended parameters
-- Use this to test strategies before committing real funds
+- All safety gates and verification still run (test your full pipeline)
+- Use this to validate strategies before committing real funds
 
 ---
 
-## File Structure
+## Enriched Pool Data
 
-```
-~/.tractioneye/
-├── config.json            ← Unified config (credentials, TP/SL, screening)
-├── briefing.json          ← Market candidates + portfolio (written by daemon)
-└── agent-session.lock     ← Session lock (written by agent, read by daemon)
-```
+Every `PoolInfo` includes data from both DexScreener and GeckoTerminal:
 
----
-
-## Rate Limits
-
-GeckoTerminal API: ~30 req/min advertised, ~5-6 burst limit in practice (per IP). Daemon and agent run as separate processes but share one IP budget.
-
-| Component | Budget | Usage |
-|-----------|--------|-------|
-| Daemon (TP/SL) | ~2 req/min | Batch price polling (1 req per tick, all positions) |
-| Daemon (screening) | ~1.7 req/min | 5 sources every 3 min (~10s with rate limiting) |
-| Agent tools | on demand | `analyze_pool` = 2 req per candidate, queued via rate limiter |
-
-The Agent Kit includes a built-in rate limiter with priority queues (Critical → High → Low), a burst bucket of 5 requests, and a minimum interval of 2 seconds between requests. On 429 errors, the client retries up to 3 times with 5-second incremental backoff.
+| Field | Description |
+|-------|-------------|
+| `poolAddress`, `name`, `dexId` | Pool identification and DEX routing |
+| `baseTokenPriceUsd`, `priceNative` | Token price in USD and relative to TON |
+| `reserveInUsd`, `fdvUsd`, `marketCapUsd` | Pool liquidity and valuation |
+| `volume1hUsd`, `volume6hUsd`, `volume24hUsd`, `volume5mUsd` | Trading volume across timeframes |
+| `priceChange5m` / `1h` / `6h` / `24h` | Price change percentages |
+| `buys5m`, `sells5m`, `buys1h`, `sells1h`, `buys6h`, `sells6h`, `buys24h`, `sells24h` | Transaction counts per timeframe |
+| `uniqueBuyers1h` / `6h` / `24h`, `uniqueSellers1h` / `6h` / `24h` | Unique wallets (from GeckoTerminal only) |
+| `buySellRatio` | Buy/sell ratio (24h) |
+| `boostTotalAmount` | Paid boost amount (attention signal) |
+| `cto` | Community takeover flag |
+| `socials`, `websites` | Token social links and websites |
+| `tags` | Discovery source: `top_volume`, `trending`, `new` |
 
 ---
 
@@ -357,6 +403,10 @@ npm run check     # TypeScript type checking
 ```
 
 ---
+
+## Attribution
+
+Triple barrier, action pattern, cooldown, and CloseType concepts adapted from [Hummingbot](https://github.com/hummingbot/hummingbot) (Apache 2.0). Computed signals and confidence summary inspired by FreqAI (concepts only, no code).
 
 ## License
 
