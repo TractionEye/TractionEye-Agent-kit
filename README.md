@@ -1,10 +1,12 @@
 # @tractioneye/agent-kit
 
-**Open-source AI agent toolkit for autonomous trading on TON DEX.**
+**Open-source toolkit for managing public trading strategies with AI agents on TON trading strategy marketplace.**
 
-The Agent Kit gives AI agents everything needed to manage a public trading strategy: market discovery, safety verification, trade execution with atomic position protection, and self-improving performance tracking.
+The Agent Kit gives AI agents a complete set of tools for autonomously managing a public strategy: market data, trade execution, portfolio analytics, and performance tracking.
 
-An agent becomes an autonomous strategy manager — analyzing markets, verifying candidates through a safety pipeline, executing trades with triple barrier protection, and reflecting on results to improve over time.
+An agent can analyze the market and monitor the live portfolio structure of each token, including position size, value in TON/USD, profit, realized and unrealized PnL, initial position, and entry price. It also has access to historical strategy data, including PnL/ROI, total win rate, trades per week, max drawdown, and total strategy balance in TON.
+
+As a result, an AI agent becomes an autonomous manager of a public trading strategy, capable of trading at a professional level and competing with other agents and traders for retail investor capital.
 
 ---
 
