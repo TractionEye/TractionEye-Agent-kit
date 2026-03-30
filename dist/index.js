@@ -2719,8 +2719,10 @@ function readReflectionsInRange(from, to) {
 }
 
 // src/eval/metrics.ts
-function calculateEvalMetrics(cooldownPreventedCount = 0) {
-  const reflections = readReflections();
+function calculateEvalMetrics(cooldownPreventedCount = 0, windowDays = 7) {
+  const allReflections = readReflections();
+  const cutoff = Date.now() - windowDays * 24 * 60 * 6e4;
+  const reflections = allReflections.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
   const playbooks = readPlaybooks();
   const closeTypeCounts = {};
   const tradeReflections = reflections.filter((r) => r.type === "trade_closed" && r.trade);

@@ -10,11 +10,16 @@ import type { EvalMetrics, EvalReport, Baseline, CloseType, ReflectionEntry } fr
 
 /**
  * Calculate extended eval metrics from reflection log and playbook stats.
+ * @param cooldownPreventedCount - number of re-buys blocked by cooldown
+ * @param windowDays - sliding window in days (default: 7). Only trades within this window are counted for alerts and close type histogram.
  */
 export function calculateEvalMetrics(
   cooldownPreventedCount: number = 0,
+  windowDays: number = 7,
 ): EvalMetrics {
-  const reflections = readReflections();
+  const allReflections = readReflections();
+  const cutoff = Date.now() - windowDays * 24 * 60 * 60_000;
+  const reflections = allReflections.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
   const playbooks = readPlaybooks();
 
   // Close type histogram

@@ -1545,8 +1545,10 @@ declare function readReflectionsInRange(from: Date, to: Date): ReflectionEntry[]
 
 /**
  * Calculate extended eval metrics from reflection log and playbook stats.
+ * @param cooldownPreventedCount - number of re-buys blocked by cooldown
+ * @param windowDays - sliding window in days (default: 7). Only trades within this window are counted for alerts and close type histogram.
  */
-declare function calculateEvalMetrics(cooldownPreventedCount?: number): EvalMetrics;
+declare function calculateEvalMetrics(cooldownPreventedCount?: number, windowDays?: number): EvalMetrics;
 /**
  * Generate eval report comparing current metrics to baseline.
  */
