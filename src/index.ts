@@ -172,4 +172,7 @@ export type {
   EvalReport,
   Baseline,
 } from './types/v2.js';
+
+// v2: Eval
+export { calculateEvalMetrics, generateEvalReport, captureBaseline } from './eval/index.js';
 export { DEFAULT_RISK_POLICY } from './types/v2.js';
