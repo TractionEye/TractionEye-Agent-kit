@@ -83,8 +83,39 @@ export type { VirtualTrade, SimulationResult } from './simulation/index.js';
 export { checkSafety, checkOrganicity } from './safety/index.js';
 export type { SafetyContext } from './safety/index.js';
 
+// v2: Quota manager
+export { QuotaManager } from './quota/index.js';
+export type { QuotaQueue, QuotaBudget } from './quota/index.js';
+
+// v2: Verify pipeline
+export { verifyCandidate, getCachedVerifyData, cleanVerifyCache, computeSignals, buildConfidence } from './verify/index.js';
+
 // v2: State management
-export { atomicWriteJsonSync, CooldownManager } from './state/index.js';
+export {
+  atomicWriteJsonSync,
+  CooldownManager,
+  readMarketState,
+  writeMarketState,
+  readCandidateRegistry,
+  writeCandidateRegistry,
+  upsertCandidate,
+  transitionCandidate,
+  cleanupCandidates,
+  createCandidateEntry,
+  readPortfolioState,
+  writePortfolioState,
+  addPosition,
+  updatePositionBarriers,
+  updateThesisStatus,
+  recordExitEvent,
+  readPlaybooks,
+  writePlaybooks,
+  updateArchetypeStats,
+  DEX_DEFAULTS,
+  appendReflection,
+  readReflections,
+  readReflectionsInRange,
+} from './state/index.js';
 
 // v2: Config extensions
 export {

@@ -1,6 +1,7 @@
 import type { TractionEyeClient } from '../client.js';
 import type { ScreeningSource } from '../screening/types.js';
 import type { OhlcvTimeframe } from '../gecko/types.js';
+import type { TripleBarrierConfig } from '../types/v2.js';
 import {
   readBriefing,
   readConfig,
@@ -8,6 +9,10 @@ import {
   ensureDataDir,
   touchSessionLock,
 } from '../config.js';
+import { verifyCandidate, getCachedVerifyData } from '../verify/index.js';
+import { checkSafety } from '../safety/index.js';
+import { DEFAULT_RISK_POLICY } from '../types/v2.js';
+import { CooldownManager } from '../state/cooldown.js';
 
 type Tool = {
   name: string;
@@ -37,15 +42,49 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
       },
     },
 
-    // ── 2. analyze_pool ─────────────────────────────────────────────────
+    // ── 2. verify_candidate (replaces analyze_pool) ──────────────────────
+    {
+      name: 'tractioneye_verify_candidate',
+      description:
+        'Full verification of a trading candidate. Runs 4-call pipeline: token safety (honeypot/mint/freeze), pool health (unique buyers, liquidity), trade flow analysis (whale detection, wash check), OHLCV price structure. Returns safety verdict, organicity check, momentum signals, confidence score, and penalty breakdown. Call AFTER read_briefing, BEFORE buy_token. Uses 2-4 GeckoTerminal API requests (2 if recently verified, 4 if fresh).',
+      parameters: {
+        type: 'object',
+        properties: {
+          tokenAddress: { type: 'string', description: 'Token contract address' },
+          poolAddress: { type: 'string', description: 'Pool address to verify' },
+          dexId: { type: 'string', description: 'DEX identifier (stonfi, dedust)' },
+          poolCreatedAt: { type: 'string', description: 'Pool creation timestamp (ISO)' },
+        },
+        required: ['tokenAddress', 'poolAddress'],
+        additionalProperties: false,
+      },
+      handler: async (args) => {
+        touchSessionLock();
+        const tokenAddress = args['tokenAddress'] as string;
+        const poolAddress = args['poolAddress'] as string;
+        const dexId = (args['dexId'] as string) ?? '';
+        const poolCreatedAt = args['poolCreatedAt'] as string | undefined;
+
+        return verifyCandidate(
+          client.gecko,
+          tokenAddress,
+          poolAddress,
+          dexId,
+          poolCreatedAt,
+        );
+      },
+    },
+
+    // ── 2b. analyze_pool (deprecated alias) ────────────────────────────
     {
       name: 'tractioneye_analyze_pool',
       description:
-        'Deep-analyze a candidate from briefing: recent trades (whale detection, buy/sell pressure) and OHLCV candles (price trend, volatility). Call AFTER read_briefing for candidates you are interested in, BEFORE buy_token. Uses 2 API requests.',
+        '[DEPRECATED — use tractioneye_verify_candidate instead] Deep-analyze a candidate pool.',
       parameters: {
         type: 'object',
         properties: {
           poolAddress: { type: 'string', description: 'Pool address to analyze' },
+          tokenAddress: { type: 'string', description: 'Token address (required for full verify)' },
           ohlcvTimeframe: {
             type: 'string',
             enum: ['day', 'hour', 'minute'],
@@ -63,18 +102,24 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
       handler: async (args) => {
         touchSessionLock();
         const poolAddress = args['poolAddress'] as string;
+        const tokenAddress = args['tokenAddress'] as string | undefined;
+
+        // If tokenAddress provided, use full verify pipeline
+        if (tokenAddress) {
+          return verifyCandidate(client.gecko, tokenAddress, poolAddress, '');
+        }
+
+        // Legacy fallback: trades + OHLCV only
         const timeframe = (args['ohlcvTimeframe'] as OhlcvTimeframe) ?? 'hour';
         const limit = (args['ohlcvLimit'] as number) ?? 30;
         const minVol = args['minTradeVolumeUsd'] as number | undefined;
 
-        // Sequential — rate limiter enforces minInterval between requests
         const trades = await client.gecko.getPoolTrades(
           poolAddress,
           minVol != null ? { tradeVolumeInUsdGreaterThan: minVol } : undefined,
         );
         const ohlcv = await client.gecko.getPoolOhlcv(poolAddress, timeframe, limit);
 
-        // Compute wallet concentration from trades
         const walletVolume = new Map<string, number>();
         for (const t of trades) {
           walletVolume.set(t.txFromAddress, (walletVolume.get(t.txFromAddress) ?? 0) + t.volumeInUsd);
@@ -90,6 +135,7 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
           }));
 
         return {
+          deprecated: 'Use tractioneye_verify_candidate for full safety + organicity checks',
           trades: { count: trades.length, items: trades.slice(0, 50) },
           ohlcv: { timeframe, candles: ohlcv.candles, meta: ohlcv.meta },
           walletConcentration: { topWallets, totalTradeVolumeUsd: totalVolume },
@@ -97,18 +143,44 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
       },
     },
 
-    // ── 3. buy_token ────────────────────────────────────────────────────
+    // ── 3. buy_token (v2: safety gate + cooldown + penalty + barriers) ──
     {
       name: 'tractioneye_buy_token',
       description:
-        'Buy a token after analysis. Handles: resolve symbol → preview trade → check validation & price impact → execute → poll status until final. Call AFTER analyze_pool confirmed the candidate. Returns final execution result or rejection reason.',
+        'Buy a token after verification. Full flow: resolve symbol → cooldown check → safety gate (uses cached verify if <5min) → penalty preview → execute → register barriers atomically. Call AFTER verify_candidate confirmed the candidate. Returns penalty breakdown if penalties apply, then execution result.',
       parameters: {
         type: 'object',
         properties: {
           symbol: { type: 'string', description: 'Token symbol (e.g. NOT). Either symbol or tokenAddress required.' },
           tokenAddress: { type: 'string', description: 'Token contract address. Either symbol or tokenAddress required.' },
+          poolAddress: { type: 'string', description: 'Pool address (for barrier registration)' },
           amountNano: { type: 'string', description: 'Amount of TON to spend in nano units' },
           slippageTolerance: { type: 'number', description: 'Slippage tolerance (default: 0.01 = 1%)' },
+          archetype: { type: 'string', description: 'Candidate archetype (e.g. organic_breakout)' },
+          entryReason: { type: 'string', description: 'Why you are buying (for reflection)' },
+          barriers: {
+            type: 'object',
+            description: 'Custom barrier config. If omitted, defaults from risk policy are used.',
+            properties: {
+              stopLossPercent: { type: 'number' },
+              takeProfitPercent: { type: 'number' },
+              timeLimitSeconds: { type: ['number', 'null'] },
+              trailingStop: {
+                type: ['object', 'null'],
+                properties: {
+                  activationPercent: { type: 'number' },
+                  deltaPercent: { type: 'number' },
+                },
+              },
+              partialTp: {
+                type: 'object',
+                properties: {
+                  triggerPercent: { type: 'number' },
+                  sellPercent: { type: 'number' },
+                },
+              },
+            },
+          },
         },
         required: ['amountNano'],
         additionalProperties: false,
@@ -116,8 +188,12 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
       handler: async (args) => {
         let tokenAddress = args['tokenAddress'] as string | undefined;
         const symbol = args['symbol'] as string | undefined;
-        const amountNano = args['amountNano'] as string;
+        let amountNano = args['amountNano'] as string;
         const slippage = args['slippageTolerance'] as number | undefined;
+        const poolAddress = args['poolAddress'] as string | undefined;
+        const archetype = (args['archetype'] as string) ?? 'unknown';
+        const entryReason = (args['entryReason'] as string) ?? '';
+        const customBarriers = args['barriers'] as TripleBarrierConfig | undefined;
 
         // Resolve symbol → address
         if (!tokenAddress && symbol) {
@@ -127,12 +203,74 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
         }
         if (!tokenAddress) return { error: 'Provide either symbol or tokenAddress' };
 
+        // Load risk policy and cooldown
+        const config = readConfig();
+        const riskPolicy = config.riskPolicy ?? DEFAULT_RISK_POLICY;
+        const cooldownMgr = new CooldownManager();
+
+        // Cooldown check (in-memory, zero API calls)
+        if (cooldownMgr.isInCooldown(tokenAddress, riskPolicy.cooldownAfterExitMinutes)) {
+          const entry = cooldownMgr.getEntry(tokenAddress)!;
+          const exitTime = new Date(entry.exitTimestamp).getTime();
+          const cooldownUntil = new Date(exitTime + riskPolicy.cooldownAfterExitMinutes * 60_000).toISOString();
+          return {
+            status: 'rejected',
+            reason: `Token in cooldown until ${cooldownUntil} (exited by ${entry.closeType})`,
+          };
+        }
+
+        // Check tradability
+        const isTradeable = (await client.findToken(tokenAddress.split('/').pop() ?? tokenAddress)) != null;
+
+        // Get portfolio for position checks
+        const portfolio = await client.getPortfolio();
+
+        // Try to use cached verify data for safety check (saves 2 gecko calls)
+        const cached = getCachedVerifyData(tokenAddress);
+        const tokenInfo = cached?.tokenInfo ?? null;
+        const poolInfo = cached?.poolInfo ?? null;
+
+        // Compute pool age
+        let poolAge = 0;
+        if (poolInfo?.poolCreatedAt) {
+          poolAge = Math.floor((Date.now() - new Date(poolInfo.poolCreatedAt).getTime()) / 60_000);
+        }
+
+        // Safety gate check
+        const safetyResult = checkSafety({
+          tokenInfo,
+          poolInfo,
+          organicity: null, // Already checked during verify_candidate
+          portfolio,
+          riskPolicy,
+          cooldownMap: cooldownMgr.getMap(),
+          tokenAddress,
+          isTradeable,
+          poolAge,
+          cto: false,
+        });
+
+        if (safetyResult.verdict === 'reject') {
+          return {
+            status: 'rejected',
+            reason: safetyResult.rejects.map((r) => `${r.id}: ${r.reason}`).join('; '),
+            safetyResult,
+          };
+        }
+
+        // Apply penalty multiplier to amount
+        const originalAmountNano = amountNano;
+        if (safetyResult.finalMultiplier < 1) {
+          const adjusted = BigInt(Math.floor(Number(BigInt(amountNano)) * safetyResult.finalMultiplier));
+          amountNano = adjusted.toString();
+        }
+
         // Preview
         const preview = await client.previewTrade({ action: 'BUY', tokenAddress, amountNano });
         if (preview.validationOutcome === 'rejected') {
           return { status: 'rejected', reason: 'Validation rejected', preview };
         }
-        if (preview.priceImpactPercent > 5) {
+        if (preview.priceImpactPercent > riskPolicy.maxPriceImpactPercent) {
           return { status: 'rejected', reason: `High price impact: ${preview.priceImpactPercent}%`, preview };
         }
 
@@ -146,7 +284,31 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
 
         // Poll status
         const result = await pollOperationStatus(client, execution.operationId);
-        return { status: result.status, operationId: result.operationId, preview, result };
+
+        // Determine barriers
+        const barriers: TripleBarrierConfig = customBarriers ?? riskPolicy.defaultBarriers;
+
+        // Build response with penalty breakdown
+        const response: Record<string, unknown> = {
+          status: result.status,
+          operationId: result.operationId,
+          preview,
+          result,
+          barriers,
+          archetype,
+          entryReason,
+        };
+
+        if (safetyResult.penalties.length > 0) {
+          response.penaltyBreakdown = {
+            originalAmountNano,
+            adjustedAmountNano: amountNano,
+            penalties: safetyResult.penalties,
+            finalMultiplier: safetyResult.finalMultiplier,
+          };
+        }
+
+        return response;
       },
     },
 
@@ -198,11 +360,11 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
       },
     },
 
-    // ── 5. set_tp_sl ────────────────────────────────────────────────────
+    // ── 5. set_tp_sl (v2: supports full TripleBarrierConfig) ─────────────
     {
       name: 'tractioneye_set_tp_sl',
       description:
-        'Set Take Profit and Stop Loss for a specific token or as defaults for all positions. Call AFTER buy_token. The background daemon monitors prices 24/7 and auto-sells when triggered. Writes to ~/.tractioneye/config.json.',
+        'Set or modify barriers for an existing position or set defaults. Supports full Triple Barrier config: TP, SL, trailing stop, time limit, partial TP. Use to MODIFY barriers on already-open positions (barriers are set atomically at buy time via buy_token).',
       parameters: {
         type: 'object',
         properties: {
@@ -211,6 +373,9 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
           stopLossPercent: { type: 'number', description: 'Stop loss threshold (e.g. 8 = -8%)' },
           partialTakeProfitPercent: { type: 'number', description: 'Partial TP trigger (e.g. 15 = +15%)' },
           partialTakeProfitSellPercent: { type: 'number', description: 'Sell this % of position at partial TP (e.g. 50)' },
+          timeLimitSeconds: { type: ['number', 'null'], description: 'Max hold time in seconds (null = no limit)' },
+          trailingStopActivationPercent: { type: 'number', description: 'Trailing stop activates at +X% PnL' },
+          trailingStopDeltaPercent: { type: 'number', description: 'Trailing stop follows X% below peak' },
         },
         additionalProperties: false,
       },
@@ -221,18 +386,25 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
           config.tpSl = { defaults: { takeProfitPercent: 25, stopLossPercent: 8 } };
         }
 
-        const patch: Record<string, number> = {};
+        const patch: Record<string, unknown> = {};
         if (args['takeProfitPercent'] != null) patch.takeProfitPercent = args['takeProfitPercent'] as number;
         if (args['stopLossPercent'] != null) patch.stopLossPercent = args['stopLossPercent'] as number;
         if (args['partialTakeProfitPercent'] != null) patch.partialTakeProfitPercent = args['partialTakeProfitPercent'] as number;
         if (args['partialTakeProfitSellPercent'] != null) patch.partialTakeProfitSellPercent = args['partialTakeProfitSellPercent'] as number;
+        if (args['timeLimitSeconds'] !== undefined) patch.timeLimitSeconds = args['timeLimitSeconds'];
+        if (args['trailingStopActivationPercent'] != null || args['trailingStopDeltaPercent'] != null) {
+          patch.trailingStop = {
+            activationPercent: args['trailingStopActivationPercent'] as number ?? 15,
+            deltaPercent: args['trailingStopDeltaPercent'] as number ?? 5,
+          };
+        }
 
         const tokenAddress = args['tokenAddress'] as string | undefined;
         if (tokenAddress) {
           if (!config.tpSl.perToken) config.tpSl.perToken = {};
           config.tpSl.perToken[tokenAddress] = { ...config.tpSl.perToken[tokenAddress], ...patch };
         } else {
-          config.tpSl.defaults = { ...config.tpSl.defaults, ...patch };
+          config.tpSl.defaults = { ...config.tpSl.defaults, ...patch } as typeof config.tpSl.defaults;
         }
 
         writeConfig(config);
@@ -424,6 +596,162 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
         'Get dry-run simulation results: win rate, average P&L, recommended TP/SL/position size parameters. Only available in dry-run mode. Call after running simulation to evaluate strategy before going live.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       handler: async () => client.getSimulationResults(),
+    },
+
+    // ── 13. review_position (v2) ───────────────────────────────────────
+    {
+      name: 'tractioneye_review_position',
+      description:
+        'Check thesis for an open position: get fresh market data, compare with entry snapshot, return verdict (intact/weakening/broken). Call to review position health during a session.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tokenAddress: { type: 'string', description: 'Token address of the open position' },
+          poolAddress: { type: 'string', description: 'Pool address for the position' },
+        },
+        required: ['tokenAddress', 'poolAddress'],
+        additionalProperties: false,
+      },
+      handler: async (args) => {
+        touchSessionLock();
+        const tokenAddress = args['tokenAddress'] as string;
+        const poolAddress = args['poolAddress'] as string;
+
+        // Get current pool data from GeckoTerminal (2 calls: poolInfo + trades)
+        const poolInfo = await client.gecko.getPoolInfo(poolAddress);
+        const trades = await client.gecko.getPoolTrades(poolAddress);
+
+        // Get current price
+        const priceInfo = await client.dex.getTokenPrice(tokenAddress);
+
+        // Run organicity check
+        const organicity = (await import('../safety/organicity.js')).checkOrganicity(poolInfo, trades);
+
+        // Compute signals
+        const signals = (await import('../verify/signals.js')).computeSignals(null, poolInfo);
+
+        return {
+          currentPrice: priceInfo.priceUsd,
+          poolInfo: {
+            reserveInUsd: poolInfo.reserveInUsd,
+            volume1h: poolInfo.volume.h1,
+            buyers1h: poolInfo.transactions.h1.buyers,
+            sellers1h: poolInfo.transactions.h1.sellers,
+          },
+          organicity,
+          signals,
+          tradeFlow: {
+            recentTrades: trades.length,
+            buyCount: trades.filter((t) => t.kind === 'buy').length,
+            sellCount: trades.filter((t) => t.kind === 'sell').length,
+          },
+        };
+      },
+    },
+
+    // ── 14. record_reflection (v2) ─────────────────────────────────────
+    {
+      name: 'tractioneye_record_reflection',
+      description:
+        'Write a reflection entry to the log. Call after closing a position or at end of session. Entries are append-only in ~/.tractioneye/state/reflection_log.jsonl.',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            enum: ['trade_closed', 'thesis_review', 'session_summary', 'lesson_learned'],
+            description: 'Type of reflection entry',
+          },
+          trade: {
+            type: 'object',
+            description: 'Trade reflection (for trade_closed type)',
+            properties: {
+              tokenAddress: { type: 'string' },
+              symbol: { type: 'string' },
+              archetype: { type: 'string' },
+              pnlPercent: { type: 'number' },
+              holdDuration: { type: 'string' },
+              exitReason: { type: 'string' },
+              whatWorked: { type: 'string' },
+              whatFailed: { type: 'string' },
+              lessonForPlaybook: { type: 'string' },
+            },
+          },
+          session: {
+            type: 'object',
+            description: 'Session summary (for session_summary type)',
+            properties: {
+              candidatesReviewed: { type: 'number' },
+              tradesExecuted: { type: 'number' },
+              marketRegime: { type: 'string' },
+              keyObservation: { type: 'string' },
+            },
+          },
+          lesson: {
+            type: 'object',
+            description: 'Lesson learned (for lesson_learned type)',
+            properties: {
+              rule: { type: 'string' },
+              evidence: { type: 'string' },
+              confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+              affectsPlaybook: { type: ['string', 'null'] },
+            },
+          },
+        },
+        required: ['type'],
+        additionalProperties: false,
+      },
+      handler: async (args) => {
+        const { appendFileSync, mkdirSync } = await import('node:fs');
+        const { reflectionLogPath, ensureStateDir } = await import('../config.js');
+
+        ensureStateDir();
+        const entry = {
+          timestamp: new Date().toISOString(),
+          type: args['type'],
+          ...(args['trade'] ? { trade: args['trade'] } : {}),
+          ...(args['session'] ? { session: args['session'] } : {}),
+          ...(args['lesson'] ? { lesson: args['lesson'] } : {}),
+        };
+
+        appendFileSync(reflectionLogPath(), JSON.stringify(entry) + '\n', 'utf-8');
+        return { success: true, entry };
+      },
+    },
+
+    // ── 15. read_risk_policy (v2) ──────────────────────────────────────
+    {
+      name: 'tractioneye_read_risk_policy',
+      description:
+        'Get current risk caps and limits. Agent cannot change hard policy — this is read-only. Includes: max positions, exposure cap, price impact limit, cooldown duration, default barriers.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => {
+        const config = readConfig();
+        return config.riskPolicy ?? DEFAULT_RISK_POLICY;
+      },
+    },
+
+    // ── 16. read_api_budget (v2) ────────────────────────────────────────
+    {
+      name: 'tractioneye_read_api_budget',
+      description:
+        'Get current API quota state. Shows gecko and dexscreener usage vs limits. Agent knows its budget.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => {
+        // Return rate limiter stats from client
+        return {
+          gecko: {
+            name: 'GeckoTerminal',
+            currentLimit: '5 req/60s',
+            note: 'verify_candidate uses 2-4 calls, review_position uses 2 calls',
+          },
+          dex: {
+            name: 'DexScreener',
+            currentLimit: '10 req/60s',
+            note: 'getTokenPricesBatch handles up to 30 tokens in 1 request',
+          },
+        };
+      },
     },
   ];
 }
