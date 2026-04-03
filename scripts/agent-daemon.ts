@@ -443,7 +443,7 @@ async function runScout(): Promise<void> {
     // Also write legacy briefing.json for backward compatibility
     const briefing = {
       timestamp: marketState.updatedAt,
-      candidates,
+      candidates: shortlist,
       tops: marketState.topLists,
       portfolio,
       strategy,
