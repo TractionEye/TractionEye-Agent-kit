@@ -315,6 +315,7 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
         const tokenAddress = args['tokenAddress'] as string;
         let amountNano = args['amountNano'] as string;
         const slippage = args['slippageTolerance'] as number | undefined;
+        const isFullExit = amountNano === 'all'; // capture before amountNano is resolved
 
         // Resolve "all"
         if (amountNano === 'all') {
@@ -343,7 +344,7 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
 
         // Write cooldown and remove position from portfolio state after full exit only.
         // Partial sells must not trigger cooldown — agent still holds tokens and may average.
-        if (result.status === 'confirmed' && amountNano === 'all') {
+        if (result.status === 'confirmed' && isFullExit) {
           const cooldownMgr = new CooldownManager();
           cooldownMgr.addEntry(tokenAddress, 'manual');
 
