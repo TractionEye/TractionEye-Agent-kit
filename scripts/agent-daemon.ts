@@ -39,6 +39,7 @@ import {
   readPlaybooks,
   writePlaybooks,
   updateArchetypeStats,
+  resolveBarriers,
   type BarrierEvent,
   type PoolInfo,
   type ScreeningFilter,
@@ -237,6 +238,7 @@ function startBarrierMonitor(): void {
 async function loadPositions(): Promise<void> {
   if (!client || !barrierManager) return;
   try {
+    const persistedState = readPortfolioState();
     const portfolio = await client.getPortfolio();
     for (const t of portfolio.tokens) {
       if (t.entryPriceTon == null) continue;
@@ -250,16 +252,17 @@ async function loadPositions(): Promise<void> {
           : 1;
         const entryPriceUsd = tokenPrice.priceUsd * ratio;
 
+        const persisted = persistedState.positions[t.address];
         barrierManager.addPosition({
           tokenAddress: t.address,
-          poolAddress: '',
+          poolAddress: persisted?.poolAddress ?? '',
           symbol: t.symbol,
           entryPriceUsd,
-          entryTimestamp: new Date().toISOString(),
+          entryTimestamp: persisted?.entryTimestamp ?? new Date().toISOString(),
           quantity: t.quantity,
-          barriers: riskPolicy.defaultBarriers,
-          peakPnlPercent: 0,
-          trailingStopActivated: false,
+          barriers: persisted?.barriers ?? resolveBarriers(t.address, undefined, config, riskPolicy),
+          peakPnlPercent: persisted?.peakPnlPercent ?? 0,
+          trailingStopActivated: persisted?.trailingStopActivated ?? false,
           partialTpTriggered: false,
         });
       } catch {

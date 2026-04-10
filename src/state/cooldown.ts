@@ -58,6 +58,19 @@ export class CooldownManager {
   }
 
   /**
+   * Unconditionally add a cooldown entry for a token. Use for explicit exits
+   * (e.g. manual sells) that must always trigger cooldown regardless of close type.
+   */
+  addEntry(tokenAddress: string, closeType: CloseType): void {
+    this.entries.set(tokenAddress, {
+      tokenAddress,
+      exitTimestamp: new Date().toISOString(),
+      closeType,
+    });
+    this.saveToDisk();
+  }
+
+  /**
    * Check if a token is in cooldown.
    * @param tokenAddress - Token to check
    * @param cooldownMinutes - Cooldown duration in minutes

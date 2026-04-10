@@ -1,6 +1,6 @@
 import type { TractionEyeClient } from '../client.js';
 import type { ScreeningSource } from '../screening/types.js';
-import type { TripleBarrierConfig } from '../types/v2.js';
+import type { TripleBarrierConfig, PositionThesis } from '../types/v2.js';
 import {
   readBriefing,
   readConfig,
@@ -9,7 +9,9 @@ import {
   touchSessionLock,
 } from '../config.js';
 import { readMarketState } from '../state/market.js';
+import { readPortfolioState, writePortfolioState, addPosition } from '../state/portfolio.js';
 import { projectPoolInfoFull, projectPoolInfoCompact, projectVerificationResult, projectMarketState, projectOrganicity } from './projection.js';
+import { resolveBarriers } from './barriers.js';
 import { verifyCandidate, getCachedVerifyData } from '../verify/index.js';
 import { checkSafety } from '../safety/index.js';
 import { DEFAULT_RISK_POLICY } from '../types/v2.js';
@@ -90,14 +92,14 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
         properties: {
           symbol: { type: 'string', description: 'Token symbol (e.g. NOT). Either symbol or tokenAddress required.' },
           tokenAddress: { type: 'string', description: 'Token contract address. Either symbol or tokenAddress required.' },
-          poolAddress: { type: 'string', description: 'Pool address (for barrier registration)' },
-          amountNano: { type: 'string', description: 'Amount of TON to spend in nano units' },
+          poolAddress: { type: 'string', description: 'Pool address from screening output (required for position tracking).' },
+          amountNano: { type: 'string', description: 'Amount to spend in nanoTON (1 TON = 1,000,000,000 nanoTON; e.g. 5 TON = 5000000000)' },
           slippageTolerance: { type: 'number', description: 'Slippage tolerance (default: 0.01 = 1%)' },
           archetype: { type: 'string', description: 'Candidate archetype (e.g. organic_breakout)' },
           entryReason: { type: 'string', description: 'Why you are buying (for reflection)' },
           barriers: {
             type: 'object',
-            description: 'Custom barrier config. If omitted, defaults from risk policy are used.',
+            description: 'Custom barrier config. Overrides ALL per-token config if provided. Omit to use risk policy defaults + per-token overrides.',
             properties: {
               stopLossPercent: { type: 'number' },
               takeProfitPercent: { type: 'number' },
@@ -119,7 +121,7 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
             },
           },
         },
-        required: ['amountNano'],
+        required: ['amountNano', 'poolAddress'],
         additionalProperties: false,
       },
       handler: async (args) => {
@@ -222,8 +224,48 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
         // Poll status
         const result = await pollOperationStatus(client, execution.operationId);
 
-        // Determine barriers
-        const barriers: TripleBarrierConfig = customBarriers ?? riskPolicy.defaultBarriers;
+        // Determine barriers (priority: defaultBarriers → perToken → customBarriers)
+        const barriers: TripleBarrierConfig = resolveBarriers(tokenAddress, customBarriers, config, riskPolicy);
+
+        // Persist position thesis on successful trade
+        if (result.status !== 'failed') {
+          const effectivePoolAddress = poolInfo?.poolAddress ?? poolAddress ?? '';
+          const effectiveSymbol = tokenInfo?.symbol ?? symbol ?? '';
+          const entryPriceUsd = parseFloat(poolInfo?.baseTokenPriceUsd ?? '0') || 0;
+          const now = new Date().toISOString();
+          const thesis: PositionThesis = {
+            tokenAddress,
+            poolAddress: effectivePoolAddress,
+            symbol: effectiveSymbol,
+            dexId: '',
+            entryPriceUsd,
+            entryTimestamp: now,
+            amountNano,
+            entrySizePercent: 0,
+            archetype,
+            entryReason,
+            thesisMetrics: {
+              entryBuyerDiversity1h: poolInfo?.transactions.h1.buyers ?? 0,
+              entryVolume1h: poolInfo?.volume.h1 ?? 0,
+              entryMomentum: 'unknown',
+            },
+            currentPriceUsd: null,
+            unrealizedPnlPercent: null,
+            peakPnlPercent: 0,
+            thesisStatus: 'intact',
+            lastReviewedAt: now,
+            barriers,
+            trailingStopActivated: false,
+            exitEvents: [],
+          };
+          try {
+            const portfolioState = readPortfolioState();
+            addPosition(portfolioState, thesis);
+            writePortfolioState(portfolioState);
+          } catch {
+            // Non-fatal: position works but won't survive restart
+          }
+        }
 
         // Build response with penalty breakdown
         const response: Record<string, unknown> = {
@@ -293,6 +335,13 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
 
         // Poll status
         const result = await pollOperationStatus(client, execution.operationId);
+
+        // Write cooldown after successful sell so re-buy is gated by cooldownAfterExitMinutes
+        if (result.status === 'confirmed') {
+          const cooldownMgr = new CooldownManager();
+          cooldownMgr.addEntry(tokenAddress, 'manual');
+        }
+
         return { status: result.status, operationId: result.operationId, preview, result };
       },
     },
@@ -318,6 +367,16 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
       },
       handler: async (args) => {
         ensureDataDir();
+
+        // partialTp fields must be provided together
+        const hasPartialTrigger = args['partialTakeProfitPercent'] != null;
+        const hasPartialSell = args['partialTakeProfitSellPercent'] != null;
+        if (hasPartialTrigger !== hasPartialSell) {
+          return {
+            error: 'partialTakeProfitPercent and partialTakeProfitSellPercent must be provided together',
+          };
+        }
+
         const config = readConfig();
         if (!config.tpSl) {
           config.tpSl = { defaults: { takeProfitPercent: 25, stopLossPercent: 8 } };

@@ -1053,6 +1053,7 @@ declare class TractionEyeClient {
      * Example: const weth = await client.findToken('WETH');
      */
     findToken(symbol: string): Promise<AvailableToken | null>;
+    findTokenByAddress(address: string): Promise<AvailableToken | null>;
     previewTrade(req: TradePreviewRequest): Promise<TradePreview>;
     /**
      * Execute a trade. In dry-run mode records a virtual trade via previewTrade().
@@ -1097,6 +1098,74 @@ type Tool = {
     handler: (args: Record<string, unknown>) => Promise<unknown>;
 };
 declare function createTractionEyeTools(client: TractionEyeClient): Tool[];
+
+/** Default data directory for TractionEye config and briefing files. */
+declare const DEFAULT_DATA_DIR: string;
+/** Path to the unified config file. */
+declare function configPath(): string;
+/** Path to the briefing file written by the daemon. */
+declare function briefingPath(): string;
+declare function stateDirPath(): string;
+declare function marketStatePath(): string;
+declare function candidateRegistryPath(): string;
+declare function portfolioStatePath(): string;
+declare function playbooksPath(): string;
+declare function cooldownPath(): string;
+declare function evalReportPath(): string;
+declare function reflectionLogPath(): string;
+declare function evalTracesDir(): string;
+type TpSlDefaults = {
+    takeProfitPercent: number;
+    stopLossPercent: number;
+    partialTakeProfitPercent?: number;
+    partialTakeProfitSellPercent?: number;
+};
+type TpSlConfig = {
+    defaults: TpSlDefaults;
+    perToken?: Record<string, Partial<TpSlDefaults>>;
+};
+type ScreeningFilterConfig = {
+    [key: string]: unknown;
+};
+type DaemonConfig = {
+    agentToken?: string;
+    sessionId?: string;
+    openclawPath?: string;
+    tpSl?: TpSlConfig;
+    screening?: {
+        intervalMs?: number;
+        filter?: ScreeningFilterConfig;
+    };
+    riskPolicy?: RiskPolicy;
+};
+/** Ensure data directory exists. */
+declare function ensureDataDir(): void;
+/** Ensure state subdirectory exists. */
+declare function ensureStateDir(): void;
+/** Read the config file. Returns empty config if file doesn't exist. */
+declare function readConfig(): DaemonConfig;
+/** Write the config file (full replace). Uses atomic write for crash safety. */
+declare function writeConfig(config: DaemonConfig): void;
+/** Merge partial updates into the existing config and write. */
+declare function updateConfig(patch: Partial<DaemonConfig>): DaemonConfig;
+/** Read the briefing file. Returns null if not found. */
+declare function readBriefing(): unknown;
+/** Path to the agent session lock file. */
+declare function sessionLockPath(): string;
+/** Touch the session lock file — signals that an agent is actively using the API. */
+declare function touchSessionLock(): void;
+/** Check if an agent session is active (lock file exists and is recent). */
+declare function isAgentSessionActive(timeoutMs?: number): boolean;
+
+/**
+ * Resolves the effective TripleBarrierConfig for a token using the priority chain:
+ *   defaultBarriers (base) → perToken config → customBarriers (LLM override, highest priority).
+ *
+ * Handles the type bridge between TpSlDefaults flat fields
+ * (partialTakeProfitPercent / partialTakeProfitSellPercent) and
+ * TripleBarrierConfig nested partialTp (triggerPercent / sellPercent).
+ */
+declare function resolveBarriers(tokenAddress: string, customBarriers: TripleBarrierConfig | undefined, config: DaemonConfig, riskPolicy: RiskPolicy): TripleBarrierConfig;
 
 type DexPair = {
     chainId: string;
@@ -1164,64 +1233,6 @@ type DexPair = {
         }>;
     };
 };
-
-/** Default data directory for TractionEye config and briefing files. */
-declare const DEFAULT_DATA_DIR: string;
-/** Path to the unified config file. */
-declare function configPath(): string;
-/** Path to the briefing file written by the daemon. */
-declare function briefingPath(): string;
-declare function stateDirPath(): string;
-declare function marketStatePath(): string;
-declare function candidateRegistryPath(): string;
-declare function portfolioStatePath(): string;
-declare function playbooksPath(): string;
-declare function cooldownPath(): string;
-declare function evalReportPath(): string;
-declare function reflectionLogPath(): string;
-declare function evalTracesDir(): string;
-type TpSlDefaults = {
-    takeProfitPercent: number;
-    stopLossPercent: number;
-    partialTakeProfitPercent?: number;
-    partialTakeProfitSellPercent?: number;
-};
-type TpSlConfig = {
-    defaults: TpSlDefaults;
-    perToken?: Record<string, Partial<TpSlDefaults>>;
-};
-type ScreeningFilterConfig = {
-    [key: string]: unknown;
-};
-type DaemonConfig = {
-    agentToken?: string;
-    sessionId?: string;
-    openclawPath?: string;
-    tpSl?: TpSlConfig;
-    screening?: {
-        intervalMs?: number;
-        filter?: ScreeningFilterConfig;
-    };
-    riskPolicy?: RiskPolicy;
-};
-/** Ensure data directory exists. */
-declare function ensureDataDir(): void;
-/** Ensure state subdirectory exists. */
-declare function ensureStateDir(): void;
-/** Read the config file. Returns empty config if file doesn't exist. */
-declare function readConfig(): DaemonConfig;
-/** Write the config file (full replace). Uses atomic write for crash safety. */
-declare function writeConfig(config: DaemonConfig): void;
-/** Merge partial updates into the existing config and write. */
-declare function updateConfig(patch: Partial<DaemonConfig>): DaemonConfig;
-/** Read the briefing file. Returns null if not found. */
-declare function readBriefing(): unknown;
-/** Path to the agent session lock file. */
-declare function sessionLockPath(): string;
-/** Touch the session lock file — signals that an agent is actively using the API. */
-declare function touchSessionLock(): void;
-/** Check if an agent session is active (lock file exists and is recent). */
-declare function isAgentSessionActive(timeoutMs?: number): boolean;
 
 /**
  * Triple Barrier Position Manager (Section VI-A).
@@ -1307,7 +1318,7 @@ type SafetyContext = {
     cooldownMap: Map<string, CooldownEntry>;
     tokenAddress: string;
     isTradeable: boolean;
-    poolAge: number;
+    poolAge: number | null;
     cto: boolean;
 };
 /**
@@ -1623,4 +1634,4 @@ declare function generateEvalReport(baseline: Baseline, cooldownPreventedCount?:
  */
 declare function captureBaseline(winRate: number, avgPnlPercent: number, maxDrawdown: number, tradesPerWeek: number): Baseline;
 
-export { type AvailableToken, type BarrierEvent, type BarrierEventHandler, BarrierManager, type BarrierPosition, type BarrierTradeExecutor, type Baseline, type CandidateEntry, type CandidateRegistry, type CandidateState, type CloseType, type CompactPoolInfo, type ComputedSignals, type ConfidenceSummary, type CooldownEntry, CooldownManager, type CooldownState, type CreatePositionAction, DEFAULT_DATA_DIR, DEFAULT_RISK_POLICY, DEX_DEFAULTS, type DaemonConfig, type DaemonEvent, type DexDefaults, type DexPair, DexScreenerClient, type EvalMetrics, type EvalReport, type EvalTrace, type FullProjectedPoolInfo, type GeckoPoolInfo, GeckoTerminalClient, type GeckoTokenInfo, type MarketBriefing, type MarketRegime, type MarketState, type MonitorConfig, type OhlcvCandle, type OhlcvMeta, type OhlcvResponse, type OhlcvTimeframe, type OperationStatus, type OperationStatusType, type OrganicitySignal, type OrganicityVerdict, type PenaltyId, type PlaybookEntry, type Playbooks, type PoolInfo, type PortfolioState, type PortfolioSummary, type PositionAction, type PositionConfig, type PositionEvent, PositionManager, type PositionThesis, type QuotaBudget, QuotaManager, type QuotaQueue, RateLimiter, type ReflectionEntry, RequestPriority, type RiskPolicy, type SafetyCheckResult, type SafetyContext, type SafetyRejectId, type ScreeningConfig, type ScreeningFilter, type ScreeningSource, type ShortlistEntry, type SimulationResult, Simulator, type SlimOrganicity, type StopPositionAction, type StorePositionAction, type StoredMomentum, type StoredVerificationResult, type StrategySummary, type TokenPrice, TokenScreener, type TokenSummary, type TpSlConfig, type TpSlDefaults, type TrackedPosition, TractionEyeClient, type TractionEyeClientConfig, TractionEyeHttpError, type TradeAction, type TradeExecution, type TradeExecutionRequest, type TradeInfo, type TradePreview, type TradePreviewRequest, type TripleBarrierConfig, type ValidationOutcome, type VerificationResult, type VirtualTrade, addPosition, appendReflection, atomicWriteJsonSync, briefingPath, buildConfidence, calculateEvalMetrics, candidateRegistryPath, captureBaseline, checkOrganicity, checkSafety, cleanVerifyCache, cleanupCandidates, computeSignals, configPath, cooldownPath, createCandidateEntry, createTractionEyeTools, ensureDataDir, ensureStateDir, evalReportPath, evalTracesDir, generateEvalReport, getCachedVerifyData, isAgentSessionActive, marketStatePath, playbooksPath, portfolioStatePath, readBriefing, readCandidateRegistry, readConfig, readMarketState, readPlaybooks, readPortfolioState, readReflections, readReflectionsInRange, recordExitEvent, reflectionLogPath, sessionLockPath, stateDirPath, touchSessionLock, transitionCandidate, updateArchetypeStats, updateConfig, updatePositionBarriers, updateThesisStatus, upsertCandidate, verifyCandidate, writeCandidateRegistry, writeConfig, writeMarketState, writePlaybooks, writePortfolioState };
+export { type AvailableToken, type BarrierEvent, type BarrierEventHandler, BarrierManager, type BarrierPosition, type BarrierTradeExecutor, type Baseline, type CandidateEntry, type CandidateRegistry, type CandidateState, type CloseType, type CompactPoolInfo, type ComputedSignals, type ConfidenceSummary, type CooldownEntry, CooldownManager, type CooldownState, type CreatePositionAction, DEFAULT_DATA_DIR, DEFAULT_RISK_POLICY, DEX_DEFAULTS, type DaemonConfig, type DaemonEvent, type DexDefaults, type DexPair, DexScreenerClient, type EvalMetrics, type EvalReport, type EvalTrace, type FullProjectedPoolInfo, type GeckoPoolInfo, GeckoTerminalClient, type GeckoTokenInfo, type MarketBriefing, type MarketRegime, type MarketState, type MonitorConfig, type OhlcvCandle, type OhlcvMeta, type OhlcvResponse, type OhlcvTimeframe, type OperationStatus, type OperationStatusType, type OrganicitySignal, type OrganicityVerdict, type PenaltyId, type PlaybookEntry, type Playbooks, type PoolInfo, type PortfolioState, type PortfolioSummary, type PositionAction, type PositionConfig, type PositionEvent, PositionManager, type PositionThesis, type QuotaBudget, QuotaManager, type QuotaQueue, RateLimiter, type ReflectionEntry, RequestPriority, type RiskPolicy, type SafetyCheckResult, type SafetyContext, type SafetyRejectId, type ScreeningConfig, type ScreeningFilter, type ScreeningSource, type ShortlistEntry, type SimulationResult, Simulator, type SlimOrganicity, type StopPositionAction, type StorePositionAction, type StoredMomentum, type StoredVerificationResult, type StrategySummary, type TokenPrice, TokenScreener, type TokenSummary, type TpSlConfig, type TpSlDefaults, type TrackedPosition, TractionEyeClient, type TractionEyeClientConfig, TractionEyeHttpError, type TradeAction, type TradeExecution, type TradeExecutionRequest, type TradeInfo, type TradePreview, type TradePreviewRequest, type TripleBarrierConfig, type ValidationOutcome, type VerificationResult, type VirtualTrade, addPosition, appendReflection, atomicWriteJsonSync, briefingPath, buildConfidence, calculateEvalMetrics, candidateRegistryPath, captureBaseline, checkOrganicity, checkSafety, cleanVerifyCache, cleanupCandidates, computeSignals, configPath, cooldownPath, createCandidateEntry, createTractionEyeTools, ensureDataDir, ensureStateDir, evalReportPath, evalTracesDir, generateEvalReport, getCachedVerifyData, isAgentSessionActive, marketStatePath, playbooksPath, portfolioStatePath, readBriefing, readCandidateRegistry, readConfig, readMarketState, readPlaybooks, readPortfolioState, readReflections, readReflectionsInRange, recordExitEvent, reflectionLogPath, resolveBarriers, sessionLockPath, stateDirPath, touchSessionLock, transitionCandidate, updateArchetypeStats, updateConfig, updatePositionBarriers, updateThesisStatus, upsertCandidate, verifyCandidate, writeCandidateRegistry, writeConfig, writeMarketState, writePlaybooks, writePortfolioState };

@@ -384,6 +384,7 @@ __export(index_exports, {
   readReflectionsInRange: () => readReflectionsInRange,
   recordExitEvent: () => recordExitEvent,
   reflectionLogPath: () => reflectionLogPath,
+  resolveBarriers: () => resolveBarriers,
   sessionLockPath: () => sessionLockPath,
   stateDirPath: () => stateDirPath,
   touchSessionLock: () => touchSessionLock,
@@ -1348,6 +1349,21 @@ var TractionEyeClient = class _TractionEyeClient {
       decimals: match.decimals
     };
   }
+  async findTokenByAddress(address) {
+    logMethodCall("findTokenByAddress", { address });
+    const r = await this.http.get(
+      `/agent/assets/search?q=${encodeURIComponent(address)}&limit=10`
+    );
+    const match = r.asset_list.find(
+      (a) => a.contract_address === address
+    );
+    if (!match) return null;
+    return {
+      address: match.contract_address,
+      symbol: match.symbol,
+      decimals: match.decimals
+    };
+  }
   // ── Trade methods ─────────────────────────────────────────────────────────
   async previewTrade(req) {
     logMethodCall("previewTrade", { action: req.action, tokenAddress: req.tokenAddress });
@@ -1585,6 +1601,54 @@ function writeMarketState(state) {
   }
 }
 
+// src/state/portfolio.ts
+var import_node_fs4 = require("fs");
+init_config();
+init_atomic();
+function readPortfolioState() {
+  try {
+    const raw = (0, import_node_fs4.readFileSync)(portfolioStatePath(), "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return { updatedAt: (/* @__PURE__ */ new Date()).toISOString(), positions: {} };
+  }
+}
+function writePortfolioState(state) {
+  state.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  atomicWriteJsonSync(portfolioStatePath(), state);
+}
+function addPosition(state, thesis) {
+  state.positions[thesis.tokenAddress] = thesis;
+}
+function updatePositionBarriers(state, tokenAddress, barriers) {
+  const pos = state.positions[tokenAddress];
+  if (!pos) return false;
+  pos.barriers = barriers;
+  return true;
+}
+function updateThesisStatus(state, tokenAddress, status) {
+  const pos = state.positions[tokenAddress];
+  if (!pos) return false;
+  pos.thesisStatus = status;
+  pos.lastReviewedAt = (/* @__PURE__ */ new Date()).toISOString();
+  return true;
+}
+function recordExitEvent(state, tokenAddress, closeType, pnlPercent, soldPercent, reason) {
+  const pos = state.positions[tokenAddress];
+  if (!pos) return false;
+  pos.exitEvents.push({
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    type: closeType,
+    pnlPercent,
+    soldPercent,
+    reason
+  });
+  if (soldPercent >= 100) {
+    delete state.positions[tokenAddress];
+  }
+  return true;
+}
+
 // src/tools/projection.ts
 function projectPoolInfoFull(p) {
   const { name: _n, socials: _s, websites: _w, priceNative: _pn, baseTokenPriceUsd: _bp, baseTokenId: _bt, ...rest } = p;
@@ -1644,6 +1708,24 @@ function projectOrganicity(o) {
     score: o.score,
     failedSignals: o.signals.filter((s) => !s.passed).map((s) => s.name)
   };
+}
+
+// src/tools/barriers.ts
+function resolveBarriers(tokenAddress, customBarriers, config, riskPolicy) {
+  const base = { ...riskPolicy.defaultBarriers };
+  const perToken = config.tpSl?.perToken?.[tokenAddress];
+  if (perToken) {
+    if (perToken.takeProfitPercent != null) base.takeProfitPercent = perToken.takeProfitPercent;
+    if (perToken.stopLossPercent != null) base.stopLossPercent = perToken.stopLossPercent;
+    if (perToken.partialTakeProfitPercent != null && perToken.partialTakeProfitSellPercent != null) {
+      base.partialTp = {
+        triggerPercent: perToken.partialTakeProfitPercent,
+        sellPercent: perToken.partialTakeProfitSellPercent
+      };
+    }
+  }
+  if (customBarriers) return customBarriers;
+  return base;
 }
 
 // src/verify/pipeline.ts
@@ -1859,7 +1941,7 @@ function checkSafety(ctx) {
       penalties.push({ id: "LOW_LOCKED_LIQUIDITY", multiplier: 0.6, reason: `Locked liquidity ${ctx.poolInfo.lockedLiquidityPercentage.toFixed(1)}% < 30%` });
     }
   }
-  if (ctx.poolAge < 30) {
+  if (ctx.poolAge !== null && ctx.poolAge < 30) {
     penalties.push({ id: "TOO_FRESH", multiplier: 0.5, reason: `Pool is only ${ctx.poolAge} minutes old` });
   }
   if (ctx.cto) {
@@ -1908,7 +1990,7 @@ var DEFAULT_RISK_POLICY = {
 };
 
 // src/state/cooldown.ts
-var import_node_fs4 = require("fs");
+var import_node_fs5 = require("fs");
 init_config();
 init_atomic();
 var COOLDOWN_TRIGGERS = /* @__PURE__ */ new Set([
@@ -1924,7 +2006,7 @@ var CooldownManager = class {
   /** Load cooldown state from disk. Filters out expired entries. */
   loadFromDisk() {
     try {
-      const raw = (0, import_node_fs4.readFileSync)(cooldownPath(), "utf-8");
+      const raw = (0, import_node_fs5.readFileSync)(cooldownPath(), "utf-8");
       const state = JSON.parse(raw);
       this.entries = new Map(Object.entries(state.entries));
     } catch {
@@ -2064,14 +2146,14 @@ function createTractionEyeTools(client) {
         properties: {
           symbol: { type: "string", description: "Token symbol (e.g. NOT). Either symbol or tokenAddress required." },
           tokenAddress: { type: "string", description: "Token contract address. Either symbol or tokenAddress required." },
-          poolAddress: { type: "string", description: "Pool address (for barrier registration)" },
-          amountNano: { type: "string", description: "Amount of TON to spend in nano units" },
+          poolAddress: { type: "string", description: "Pool address from screening output (required for position tracking)." },
+          amountNano: { type: "string", description: "Amount to spend in nanoTON (1 TON = 1,000,000,000 nanoTON; e.g. 5 TON = 5000000000)" },
           slippageTolerance: { type: "number", description: "Slippage tolerance (default: 0.01 = 1%)" },
           archetype: { type: "string", description: "Candidate archetype (e.g. organic_breakout)" },
           entryReason: { type: "string", description: "Why you are buying (for reflection)" },
           barriers: {
             type: "object",
-            description: "Custom barrier config. If omitted, defaults from risk policy are used.",
+            description: "Custom barrier config. Overrides ALL per-token config if provided. Omit to use risk policy defaults + per-token overrides.",
             properties: {
               stopLossPercent: { type: "number" },
               takeProfitPercent: { type: "number" },
@@ -2093,7 +2175,7 @@ function createTractionEyeTools(client) {
             }
           }
         },
-        required: ["amountNano"],
+        required: ["amountNano", "poolAddress"],
         additionalProperties: false
       },
       handler: async (args) => {
@@ -2123,12 +2205,12 @@ function createTractionEyeTools(client) {
             reason: `Token in cooldown until ${cooldownUntil} (exited by ${entry.closeType})`
           };
         }
-        const isTradeable = await client.findToken(tokenAddress.split("/").pop() ?? tokenAddress) != null;
+        const isTradeable = await client.findTokenByAddress(tokenAddress) != null;
         const portfolio = await client.getPortfolio();
         const cached = getCachedVerifyData(tokenAddress);
         const tokenInfo = cached?.tokenInfo ?? null;
         const poolInfo = cached?.poolInfo ?? null;
-        let poolAge = 0;
+        let poolAge = null;
         if (poolInfo?.poolCreatedAt) {
           poolAge = Math.floor((Date.now() - new Date(poolInfo.poolCreatedAt).getTime()) / 6e4);
         }
@@ -2171,7 +2253,44 @@ function createTractionEyeTools(client) {
           slippageTolerance: slippage
         });
         const result = await pollOperationStatus(client, execution.operationId);
-        const barriers = customBarriers ?? riskPolicy.defaultBarriers;
+        const barriers = resolveBarriers(tokenAddress, customBarriers, config, riskPolicy);
+        if (result.status !== "failed") {
+          const effectivePoolAddress = poolInfo?.poolAddress ?? poolAddress ?? "";
+          const effectiveSymbol = tokenInfo?.symbol ?? symbol ?? "";
+          const entryPriceUsd = parseFloat(poolInfo?.baseTokenPriceUsd ?? "0") || 0;
+          const now = (/* @__PURE__ */ new Date()).toISOString();
+          const thesis = {
+            tokenAddress,
+            poolAddress: effectivePoolAddress,
+            symbol: effectiveSymbol,
+            dexId: "",
+            entryPriceUsd,
+            entryTimestamp: now,
+            amountNano,
+            entrySizePercent: 0,
+            archetype,
+            entryReason,
+            thesisMetrics: {
+              entryBuyerDiversity1h: poolInfo?.transactions.h1.buyers ?? 0,
+              entryVolume1h: poolInfo?.volume.h1 ?? 0,
+              entryMomentum: "unknown"
+            },
+            currentPriceUsd: null,
+            unrealizedPnlPercent: null,
+            peakPnlPercent: 0,
+            thesisStatus: "intact",
+            lastReviewedAt: now,
+            barriers,
+            trailingStopActivated: false,
+            exitEvents: []
+          };
+          try {
+            const portfolioState = readPortfolioState();
+            addPosition(portfolioState, thesis);
+            writePortfolioState(portfolioState);
+          } catch {
+          }
+        }
         const response = {
           status: result.status,
           operationId: result.operationId,
@@ -2250,6 +2369,13 @@ function createTractionEyeTools(client) {
       },
       handler: async (args) => {
         ensureDataDir();
+        const hasPartialTrigger = args["partialTakeProfitPercent"] != null;
+        const hasPartialSell = args["partialTakeProfitSellPercent"] != null;
+        if (hasPartialTrigger !== hasPartialSell) {
+          return {
+            error: "partialTakeProfitPercent and partialTakeProfitSellPercent must be provided together"
+          };
+        }
         const config = readConfig();
         if (!config.tpSl) {
           config.tpSl = { defaults: { takeProfitPercent: 25, stopLossPercent: 8 } };
@@ -2868,12 +2994,12 @@ var QuotaManager = class {
 init_atomic();
 
 // src/state/candidates.ts
-var import_node_fs5 = require("fs");
+var import_node_fs6 = require("fs");
 init_config();
 init_atomic();
 function readCandidateRegistry() {
   try {
-    const raw = (0, import_node_fs5.readFileSync)(candidateRegistryPath(), "utf-8");
+    const raw = (0, import_node_fs6.readFileSync)(candidateRegistryPath(), "utf-8");
     return JSON.parse(raw);
   } catch {
     return { candidates: {} };
@@ -2924,54 +3050,6 @@ function createCandidateEntry(tokenAddress, poolAddress, symbol, dexId, tags) {
     rejectionReason: null,
     ttl
   };
-}
-
-// src/state/portfolio.ts
-var import_node_fs6 = require("fs");
-init_config();
-init_atomic();
-function readPortfolioState() {
-  try {
-    const raw = (0, import_node_fs6.readFileSync)(portfolioStatePath(), "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return { updatedAt: (/* @__PURE__ */ new Date()).toISOString(), positions: {} };
-  }
-}
-function writePortfolioState(state) {
-  state.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-  atomicWriteJsonSync(portfolioStatePath(), state);
-}
-function addPosition(state, thesis) {
-  state.positions[thesis.tokenAddress] = thesis;
-}
-function updatePositionBarriers(state, tokenAddress, barriers) {
-  const pos = state.positions[tokenAddress];
-  if (!pos) return false;
-  pos.barriers = barriers;
-  return true;
-}
-function updateThesisStatus(state, tokenAddress, status) {
-  const pos = state.positions[tokenAddress];
-  if (!pos) return false;
-  pos.thesisStatus = status;
-  pos.lastReviewedAt = (/* @__PURE__ */ new Date()).toISOString();
-  return true;
-}
-function recordExitEvent(state, tokenAddress, closeType, pnlPercent, soldPercent, reason) {
-  const pos = state.positions[tokenAddress];
-  if (!pos) return false;
-  pos.exitEvents.push({
-    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    type: closeType,
-    pnlPercent,
-    soldPercent,
-    reason
-  });
-  if (soldPercent >= 100) {
-    delete state.positions[tokenAddress];
-  }
-  return true;
 }
 
 // src/state/playbooks.ts
@@ -3302,6 +3380,7 @@ function captureBaseline(winRate, avgPnlPercent, maxDrawdown, tradesPerWeek) {
   readReflectionsInRange,
   recordExitEvent,
   reflectionLogPath,
+  resolveBarriers,
   sessionLockPath,
   stateDirPath,
   touchSessionLock,
