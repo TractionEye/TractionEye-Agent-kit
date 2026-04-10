@@ -92,14 +92,14 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
         properties: {
           symbol: { type: 'string', description: 'Token symbol (e.g. NOT). Either symbol or tokenAddress required.' },
           tokenAddress: { type: 'string', description: 'Token contract address. Either symbol or tokenAddress required.' },
-          poolAddress: { type: 'string', description: 'Pool address (for barrier registration)' },
-          amountNano: { type: 'string', description: 'Amount of TON to spend in nano units' },
+          poolAddress: { type: 'string', description: 'Pool address from screening output (required for position tracking).' },
+          amountNano: { type: 'string', description: 'Amount to spend in nanoTON (1 TON = 1,000,000,000 nanoTON; e.g. 5 TON = 5000000000)' },
           slippageTolerance: { type: 'number', description: 'Slippage tolerance (default: 0.01 = 1%)' },
           archetype: { type: 'string', description: 'Candidate archetype (e.g. organic_breakout)' },
           entryReason: { type: 'string', description: 'Why you are buying (for reflection)' },
           barriers: {
             type: 'object',
-            description: 'Custom barrier config. If omitted, defaults from risk policy are used.',
+            description: 'Custom barrier config. Overrides ALL per-token config if provided. Omit to use risk policy defaults + per-token overrides.',
             properties: {
               stopLossPercent: { type: 'number' },
               takeProfitPercent: { type: 'number' },
@@ -121,7 +121,7 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
             },
           },
         },
-        required: ['amountNano'],
+        required: ['amountNano', 'poolAddress'],
         additionalProperties: false,
       },
       handler: async (args) => {
@@ -360,6 +360,16 @@ export function createTractionEyeTools(client: TractionEyeClient): Tool[] {
       },
       handler: async (args) => {
         ensureDataDir();
+
+        // partialTp fields must be provided together
+        const hasPartialTrigger = args['partialTakeProfitPercent'] != null;
+        const hasPartialSell = args['partialTakeProfitSellPercent'] != null;
+        if (hasPartialTrigger !== hasPartialSell) {
+          return {
+            error: 'partialTakeProfitPercent and partialTakeProfitSellPercent must be provided together',
+          };
+        }
+
         const config = readConfig();
         if (!config.tpSl) {
           config.tpSl = { defaults: { takeProfitPercent: 25, stopLossPercent: 8 } };
