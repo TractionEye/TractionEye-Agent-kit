@@ -1791,7 +1791,11 @@ function createTractionEyeTools(client) {
       handler: async (args) => {
         let tokenAddress = args["tokenAddress"];
         const symbol = args["symbol"];
-        let amountNano = args["amountNano"];
+        const amountNanoRaw = args["amountNano"];
+        if (!amountNanoRaw || typeof amountNanoRaw !== "string") {
+          return { error: 'amountNano required \u2014 provide nanoTON string (e.g. "5000000000" for 5 TON)' };
+        }
+        let amountNano = amountNanoRaw;
         const slippage = args["slippageTolerance"];
         const poolAddress = args["poolAddress"];
         const archetype = args["archetype"] ?? "unknown";
