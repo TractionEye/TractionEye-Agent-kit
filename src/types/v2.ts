@@ -320,6 +320,7 @@ export type PositionThesis = {
   lastReviewedAt: string;
   barriers: TripleBarrierConfig;
   trailingStopActivated: boolean;
+  partialTpTriggered: boolean;
   exitEvents: {
     timestamp: string;
     type: CloseType;

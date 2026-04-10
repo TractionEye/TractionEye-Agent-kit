@@ -194,6 +194,11 @@ function startBarrierMonitor(): void {
       event.sellPercent,
       event.reason,
     );
+    // Persist partialTpTriggered flag so it survives daemon restart
+    if (event.closeType === 'partial_tp') {
+      const pos = portfolioState.positions[event.tokenAddress];
+      if (pos) pos.partialTpTriggered = true;
+    }
     writePortfolioState(portfolioState);
 
     // Record cooldown for losing exits
@@ -263,7 +268,7 @@ async function loadPositions(): Promise<void> {
           barriers: persisted?.barriers ?? resolveBarriers(t.address, undefined, config, riskPolicy),
           peakPnlPercent: persisted?.peakPnlPercent ?? 0,
           trailingStopActivated: persisted?.trailingStopActivated ?? false,
-          partialTpTriggered: false,
+          partialTpTriggered: persisted?.partialTpTriggered ?? false,
         });
       } catch {
         // Skip token if price fetch fails

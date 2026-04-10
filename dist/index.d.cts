@@ -391,6 +391,7 @@ type PositionThesis = {
     lastReviewedAt: string;
     barriers: TripleBarrierConfig;
     trailingStopActivated: boolean;
+    partialTpTriggered: boolean;
     exitEvents: {
         timestamp: string;
         type: CloseType;
@@ -1158,8 +1159,10 @@ declare function touchSessionLock(): void;
 declare function isAgentSessionActive(timeoutMs?: number): boolean;
 
 /**
- * Resolves the effective TripleBarrierConfig for a token using the priority chain:
- *   defaultBarriers (base) → perToken config → customBarriers (LLM override, highest priority).
+ * Resolves the effective TripleBarrierConfig for a token by merging three layers:
+ *   1. defaultBarriers (base)
+ *   2. perToken config — merges individual fields over base
+ *   3. customBarriers — merges individual fields over result (present fields override, absent fields preserved)
  *
  * Handles the type bridge between TpSlDefaults flat fields
  * (partialTakeProfitPercent / partialTakeProfitSellPercent) and
@@ -1461,6 +1464,11 @@ declare class CooldownManager {
      * Record a position close. Adds cooldown entry if close type triggers cooldown.
      */
     recordClose(tokenAddress: string, closeType: CloseType): void;
+    /**
+     * Unconditionally add a cooldown entry for a token. Use for explicit exits
+     * (e.g. manual sells) that must always trigger cooldown regardless of close type.
+     */
+    addEntry(tokenAddress: string, closeType: CloseType): void;
     /**
      * Check if a token is in cooldown.
      * @param tokenAddress - Token to check
