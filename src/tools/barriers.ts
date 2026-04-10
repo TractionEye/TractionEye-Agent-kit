@@ -2,8 +2,10 @@ import type { TripleBarrierConfig, RiskPolicy } from '../types/v2.js';
 import type { DaemonConfig } from '../config.js';
 
 /**
- * Resolves the effective TripleBarrierConfig for a token using the priority chain:
- *   defaultBarriers (base) → perToken config → customBarriers (LLM override, highest priority).
+ * Resolves the effective TripleBarrierConfig for a token by merging three layers:
+ *   1. defaultBarriers (base)
+ *   2. perToken config — merges individual fields over base
+ *   3. customBarriers — merges individual fields over result (present fields override, absent fields preserved)
  *
  * Handles the type bridge between TpSlDefaults flat fields
  * (partialTakeProfitPercent / partialTakeProfitSellPercent) and
